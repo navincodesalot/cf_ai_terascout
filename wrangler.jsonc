@@ -31,10 +31,13 @@
     "binding": "AI",
   },
 
+  /** Custom domain + workers.dev preview */
   "routes": [
     {
       "pattern": "terascout.vael.ai",
       "custom_domain": true,
     },
   ],
+  "workers_dev": true,
+  "preview_urls": true,
 }
