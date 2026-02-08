@@ -1,4 +1,5 @@
 import { discoverSources } from "./lib/ai";
+import { SCOUT_CONFIG } from "./config";
 import type {
   CreateScoutRequest,
   CreateScoutResponse,
@@ -74,12 +75,32 @@ async function handleCreateScout(
   // Source discovery: Google News search URL (dynamic—new articles appear when we poll)
   const sources = await discoverSources(env.AI, body.query.trim());
 
+  // Determine expiration: use provided expiresAt or default lifetime
+  const now = new Date();
+  let expiresAt: string;
+  if (body.expiresAt) {
+    const parsed = new Date(body.expiresAt);
+    // Clamp to max lifetime
+    const maxExpiry = new Date(
+      now.getTime() + SCOUT_CONFIG.maxLifetimeHours * 60 * 60 * 1000,
+    );
+    expiresAt =
+      parsed.getTime() > maxExpiry.getTime()
+        ? maxExpiry.toISOString()
+        : parsed.toISOString();
+  } else {
+    expiresAt = new Date(
+      now.getTime() + SCOUT_CONFIG.defaultLifetimeHours * 60 * 60 * 1000,
+    ).toISOString();
+  }
+
   const config: ScoutConfig = {
     scoutId,
     query: body.query.trim(),
     email: body.email.trim(),
     sources,
-    createdAt: new Date().toISOString(),
+    createdAt: now.toISOString(),
+    expiresAt,
   };
 
   // Save config to Durable Object

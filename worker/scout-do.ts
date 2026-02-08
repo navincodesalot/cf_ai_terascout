@@ -21,7 +21,8 @@ export class ScoutDO extends DurableObject<Env> {
         scoutId    TEXT PRIMARY KEY,
         query      TEXT NOT NULL,
         email      TEXT NOT NULL,
-        createdAt  TEXT NOT NULL
+        createdAt  TEXT NOT NULL,
+        expiresAt  TEXT NOT NULL DEFAULT ''
       );
 
       CREATE TABLE IF NOT EXISTS sources (
@@ -34,14 +35,62 @@ export class ScoutDO extends DurableObject<Env> {
       );
 
       CREATE TABLE IF NOT EXISTS events (
-        eventId    TEXT PRIMARY KEY,
-        sourceUrl  TEXT NOT NULL,
+        eventId     TEXT PRIMARY KEY,
+        sourceUrl   TEXT NOT NULL,
         sourceLabel TEXT NOT NULL,
-        summary    TEXT NOT NULL,
-        detectedAt TEXT NOT NULL,
-        notified   INTEGER NOT NULL DEFAULT 0
+        summary     TEXT NOT NULL,
+        tldr        TEXT NOT NULL DEFAULT '',
+        highlights  TEXT NOT NULL DEFAULT '[]',
+        articles    TEXT NOT NULL DEFAULT '[]',
+        isBreaking  INTEGER NOT NULL DEFAULT 0,
+        detectedAt  TEXT NOT NULL,
+        notified    INTEGER NOT NULL DEFAULT 0
+      );
+
+      CREATE TABLE IF NOT EXISTS email_counter (
+        dateKey     TEXT PRIMARY KEY,
+        count       INTEGER NOT NULL DEFAULT 0
       );
     `);
+
+    // Migration: add expiresAt column if it doesn't exist (for existing scouts)
+    try {
+      this.sql.exec(
+        `ALTER TABLE config ADD COLUMN expiresAt TEXT NOT NULL DEFAULT ''`,
+      );
+    } catch {
+      // Column already exists — fine
+    }
+
+    // Migration: add new event columns
+    try {
+      this.sql.exec(
+        `ALTER TABLE events ADD COLUMN tldr TEXT NOT NULL DEFAULT ''`,
+      );
+    } catch {
+      /* already exists */
+    }
+    try {
+      this.sql.exec(
+        `ALTER TABLE events ADD COLUMN highlights TEXT NOT NULL DEFAULT '[]'`,
+      );
+    } catch {
+      /* already exists */
+    }
+    try {
+      this.sql.exec(
+        `ALTER TABLE events ADD COLUMN articles TEXT NOT NULL DEFAULT '[]'`,
+      );
+    } catch {
+      /* already exists */
+    }
+    try {
+      this.sql.exec(
+        `ALTER TABLE events ADD COLUMN isBreaking INTEGER NOT NULL DEFAULT 0`,
+      );
+    } catch {
+      /* already exists */
+    }
   }
 
   /** Route internal requests */
@@ -75,6 +124,14 @@ export class ScoutDO extends DurableObject<Env> {
         return this.getEvents();
       }
 
+      // ── Email counter ──────────────────────────────────────────
+      if (path === "/email-count" && request.method === "GET") {
+        return this.getEmailCount();
+      }
+      if (path === "/email-count" && request.method === "POST") {
+        return this.incrementEmailCount();
+      }
+
       // ── Wipe (clear all storage) ────────────────────────────────
       if (path === "/wipe" && request.method === "POST") {
         return this.wipe();
@@ -90,15 +147,16 @@ export class ScoutDO extends DurableObject<Env> {
   // ── Config ────────────────────────────────────────────────────────
 
   private saveConfig(body: ScoutConfig): Response {
-    const { scoutId, query, email, sources, createdAt } = body;
+    const { scoutId, query, email, sources, createdAt, expiresAt } = body;
 
     // Upsert config row
     this.sql.exec(
-      `INSERT OR REPLACE INTO config (scoutId, query, email, createdAt) VALUES (?, ?, ?, ?)`,
+      `INSERT OR REPLACE INTO config (scoutId, query, email, createdAt, expiresAt) VALUES (?, ?, ?, ?, ?)`,
       scoutId,
       query,
       email,
       createdAt,
+      expiresAt || "",
     );
 
     // Insert sources
@@ -116,7 +174,9 @@ export class ScoutDO extends DurableObject<Env> {
 
   private getConfig(): Response {
     const configRow = this.sql
-      .exec("SELECT scoutId, query, email, createdAt FROM config LIMIT 1")
+      .exec(
+        "SELECT scoutId, query, email, createdAt, expiresAt FROM config LIMIT 1",
+      )
       .toArray()[0];
 
     if (!configRow) {
@@ -132,6 +192,7 @@ export class ScoutDO extends DurableObject<Env> {
       query: configRow.query as string,
       email: configRow.email as string,
       createdAt: configRow.createdAt as string,
+      expiresAt: (configRow.expiresAt as string) || "",
       sources,
     };
 
@@ -173,7 +234,22 @@ export class ScoutDO extends DurableObject<Env> {
 
   // ── Events ────────────────────────────────────────────────────────
 
-  private recordEvent(body: Omit<ScoutEvent, "notified">): Response {
+  private recordEvent(body: {
+    eventId: string;
+    sourceUrl: string;
+    sourceLabel: string;
+    summary: string;
+    tldr: string;
+    highlights: string[];
+    articles: Array<{
+      title: string;
+      url: string;
+      imageUrl?: string;
+      snippet?: string;
+    }>;
+    isBreaking: boolean;
+    detectedAt: string;
+  }): Response {
     // Idempotency: if eventId already exists, skip
     const existing = this.sql
       .exec("SELECT eventId FROM events WHERE eventId = ?", body.eventId)
@@ -184,11 +260,15 @@ export class ScoutDO extends DurableObject<Env> {
     }
 
     this.sql.exec(
-      `INSERT INTO events (eventId, sourceUrl, sourceLabel, summary, detectedAt, notified) VALUES (?, ?, ?, ?, ?, 0)`,
+      `INSERT INTO events (eventId, sourceUrl, sourceLabel, summary, tldr, highlights, articles, isBreaking, detectedAt, notified) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
       body.eventId,
       body.sourceUrl,
       body.sourceLabel,
       body.summary,
+      body.tldr || "",
+      JSON.stringify(body.highlights || []),
+      JSON.stringify(body.articles || []),
+      body.isBreaking ? 1 : 0,
       body.detectedAt,
     );
 
@@ -198,7 +278,7 @@ export class ScoutDO extends DurableObject<Env> {
   private getEvents(): Response {
     const rows = this.sql
       .exec(
-        "SELECT eventId, sourceUrl, sourceLabel, summary, detectedAt, notified FROM events ORDER BY detectedAt DESC",
+        "SELECT eventId, sourceUrl, sourceLabel, summary, tldr, highlights, articles, isBreaking, detectedAt, notified FROM events ORDER BY detectedAt DESC",
       )
       .toArray();
 
@@ -207,6 +287,10 @@ export class ScoutDO extends DurableObject<Env> {
       sourceUrl: r.sourceUrl as string,
       sourceLabel: r.sourceLabel as string,
       summary: r.summary as string,
+      tldr: (r.tldr as string) || "",
+      highlights: safeJsonParse(r.highlights as string, []),
+      articles: safeJsonParse(r.articles as string, []),
+      isBreaking: Boolean(r.isBreaking),
       detectedAt: r.detectedAt as string,
       notified: Boolean(r.notified),
     }));
@@ -214,11 +298,46 @@ export class ScoutDO extends DurableObject<Env> {
     return Response.json(events);
   }
 
+  // ── Email counter ─────────────────────────────────────────────────
+
+  private getEmailCount(): Response {
+    const dateKey = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+    const row = this.sql
+      .exec("SELECT count FROM email_counter WHERE dateKey = ?", dateKey)
+      .toArray()[0];
+    const count = row ? (row.count as number) : 0;
+    return Response.json({ dateKey, count });
+  }
+
+  private incrementEmailCount(): Response {
+    const dateKey = new Date().toISOString().slice(0, 10);
+    this.sql.exec(
+      `INSERT INTO email_counter (dateKey, count) VALUES (?, 1)
+       ON CONFLICT(dateKey) DO UPDATE SET count = count + 1`,
+      dateKey,
+    );
+    // Clean up old date keys (keep only today)
+    this.sql.exec("DELETE FROM email_counter WHERE dateKey != ?", dateKey);
+    const row = this.sql
+      .exec("SELECT count FROM email_counter WHERE dateKey = ?", dateKey)
+      .toArray()[0];
+    return Response.json({ dateKey, count: row ? (row.count as number) : 1 });
+  }
+
   /** Clear all stored data (config, sources, events). Used when deleting a scout. */
   private wipe(): Response {
     this.sql.exec("DELETE FROM config");
     this.sql.exec("DELETE FROM sources");
     this.sql.exec("DELETE FROM events");
+    this.sql.exec("DELETE FROM email_counter");
     return Response.json({ ok: true });
+  }
+}
+
+function safeJsonParse<T>(str: string, fallback: T): T {
+  try {
+    return JSON.parse(str) as T;
+  } catch {
+    return fallback;
   }
 }

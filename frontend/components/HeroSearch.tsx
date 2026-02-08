@@ -1,17 +1,17 @@
-import { useState, type FormEvent } from "react";
+import { type FormEvent } from "react";
 import { Search } from "lucide-react";
 import { Input } from "@/components/ui/input";
 
 interface HeroSearchProps {
+  value: string;
+  onChange: (value: string) => void;
   onSubmit: (query: string) => void;
 }
 
-export function HeroSearch({ onSubmit }: HeroSearchProps) {
-  const [query, setQuery] = useState("");
-
+export function HeroSearch({ value, onChange, onSubmit }: HeroSearchProps) {
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    const trimmed = query.trim();
+    const trimmed = value.trim();
     if (trimmed) {
       onSubmit(trimmed);
     }
@@ -34,8 +34,8 @@ export function HeroSearch({ onSubmit }: HeroSearchProps) {
           <Input
             type="text"
             placeholder='e.g. "Keep me updated on NVIDIA GPU drops"'
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
             className="border-border/50 bg-card h-12 rounded-xl pr-4 pl-10 text-base shadow-sm transition-shadow focus:shadow-md"
           />
         </div>

@@ -6,24 +6,23 @@ import {
 import { fetchPageText, hashText } from "./lib/fetcher";
 import { analyzeChange, isDuplicateEvent } from "./lib/ai";
 import { sendEventEmail } from "./lib/email";
+import { SCOUT_CONFIG } from "./config";
 import type { ScoutConfig, ScoutEvent, SourceSnapshot } from "./types";
 
 interface WorkflowParams {
   scoutId: string;
 }
 
-const POLL_INTERVAL = "10 minutes";
-const MAX_CYCLES = 200; // stay well under 1024-step limit
-
 /**
  * ScoutWorkflow: the polling loop engine.
  *
  * Each scout gets one workflow instance that:
  *   1. Loads config from its Durable Object
- *   2. Fetches each source and diffs with last snapshot
- *   3. If diff detected, asks Workers AI if it's a real event
- *   4. If real event, records it and sends email via Resend
- *   5. Sleeps, then loops
+ *   2. Checks if the scout has expired (hard stop)
+ *   3. Fetches each source and diffs with last snapshot
+ *   4. If diff detected, asks Workers AI if it's a real event
+ *   5. If real event + under email limit, records it and sends email via Resend
+ *   6. Sleeps, then loops
  */
 export class ScoutWorkflow extends WorkflowEntrypoint<Env, WorkflowParams> {
   override async run(
@@ -32,7 +31,7 @@ export class ScoutWorkflow extends WorkflowEntrypoint<Env, WorkflowParams> {
   ): Promise<void> {
     const { scoutId } = event.payload;
 
-    for (let cycle = 0; cycle < MAX_CYCLES; cycle++) {
+    for (let cycle = 0; cycle < SCOUT_CONFIG.maxCycles; cycle++) {
       // ── Step 1: Load config from DO ────────────────────────────
       const config = await step.do(`load-config-${cycle}`, async () => {
         const doId = this.env.SCOUT_DO.idFromName(scoutId);
@@ -42,7 +41,29 @@ export class ScoutWorkflow extends WorkflowEntrypoint<Env, WorkflowParams> {
         return (await res.json()) as ScoutConfig;
       });
 
-      // ── Step 2: Check each source ──────────────────────────────
+      // ── Step 2: Check hard stop (expiration) ───────────────────
+      if (config.expiresAt) {
+        const expiresMs = new Date(config.expiresAt).getTime();
+        if (Date.now() >= expiresMs) {
+          console.log(
+            `[scout ${scoutId}] Expired at ${config.expiresAt}. Stopping.`,
+          );
+          return; // Hard stop — end workflow
+        }
+      }
+
+      // ── Step 3: Check email rate limit for today ───────────────
+      const emailCount = await step.do(`email-count-${cycle}`, async () => {
+        const doId = this.env.SCOUT_DO.idFromName(scoutId);
+        const stub = this.env.SCOUT_DO.get(doId);
+        const res = await stub.fetch(new Request("http://do/email-count"));
+        return (await res.json()) as { dateKey: string; count: number };
+      });
+
+      const canSendEmail =
+        emailCount.count < SCOUT_CONFIG.maxEmailsPerScoutPerDay;
+
+      // ── Step 4: Check each source ──────────────────────────────
       for (const source of config.sources) {
         // Fetch the page (skip source on failure — don't fail entire workflow)
         let fetchResult: { text: string; hash: string } | null = null;
@@ -125,7 +146,7 @@ export class ScoutWorkflow extends WorkflowEntrypoint<Env, WorkflowParams> {
                 const res = await stub.fetch(new Request("http://do/events"));
                 const events = (await res.json()) as ScoutEvent[];
                 const recentSummaries = events
-                  .slice(0, 5)
+                  .slice(0, SCOUT_CONFIG.dedupeLookback)
                   .map((e) => e.summary)
                   .filter(Boolean);
                 return isDuplicateEvent(
@@ -161,6 +182,10 @@ export class ScoutWorkflow extends WorkflowEntrypoint<Env, WorkflowParams> {
                       sourceUrl: source.url,
                       sourceLabel: source.label,
                       summary: analysis.summary,
+                      tldr: analysis.tldr,
+                      highlights: analysis.highlights,
+                      articles: analysis.articles,
+                      isBreaking: analysis.is_breaking,
                       detectedAt: new Date().toISOString(),
                     }),
                   }),
@@ -172,8 +197,8 @@ export class ScoutWorkflow extends WorkflowEntrypoint<Env, WorkflowParams> {
               },
             );
 
-            // Send email only if this is a new event (not duplicate)
-            if (recorded.ok && !recorded.duplicate) {
+            // Send email only if this is a new event AND under daily limit
+            if (recorded.ok && !recorded.duplicate && canSendEmail) {
               await step.do(
                 `email-${cycle}-${source.label}`,
                 {
@@ -193,9 +218,20 @@ export class ScoutWorkflow extends WorkflowEntrypoint<Env, WorkflowParams> {
                       sourceUrl: source.url,
                       sourceLabel: source.label,
                       summary: analysis.summary,
+                      tldr: analysis.tldr,
+                      highlights: analysis.highlights,
+                      articles: analysis.articles,
+                      isBreaking: analysis.is_breaking,
                       detectedAt: new Date().toISOString(),
                       notified: true,
                     },
+                  );
+
+                  // Increment email counter
+                  const doId = this.env.SCOUT_DO.idFromName(scoutId);
+                  const stub = this.env.SCOUT_DO.get(doId);
+                  await stub.fetch(
+                    new Request("http://do/email-count", { method: "POST" }),
                   );
                 },
               );
@@ -204,8 +240,8 @@ export class ScoutWorkflow extends WorkflowEntrypoint<Env, WorkflowParams> {
         }
       }
 
-      // ── Step 3: Sleep until next poll ──────────────────────────
-      await step.sleep(`wait-${cycle}`, POLL_INTERVAL);
+      // ── Step 5: Sleep until next poll ──────────────────────────
+      await step.sleep(`wait-${cycle}`, SCOUT_CONFIG.pollInterval);
     }
   }
 }

@@ -5,6 +5,14 @@ export interface Source {
   strategy: "html_diff";
 }
 
+// ── Article: individual article extracted from a source page ─────────
+export interface Article {
+  title: string;
+  url: string;
+  imageUrl?: string;
+  snippet?: string;
+}
+
 // ── Scout config: persisted in DO on creation ───────────────────────
 export interface ScoutConfig {
   scoutId: string;
@@ -12,6 +20,7 @@ export interface ScoutConfig {
   email: string;
   sources: Source[];
   createdAt: string; // ISO timestamp
+  expiresAt: string; // ISO timestamp — hard stop, scout stops reporting after this
 }
 
 // ── Scout event: one per detected state transition ──────────────────
@@ -20,6 +29,10 @@ export interface ScoutEvent {
   sourceUrl: string;
   sourceLabel: string;
   summary: string;
+  tldr: string; // short 1-line summary
+  highlights: string[]; // key points / what changed
+  articles: Article[]; // individual articles found
+  isBreaking: boolean; // whether this is breaking news
   detectedAt: string; // ISO timestamp
   notified: boolean;
 }
@@ -41,12 +54,17 @@ export interface SourceDiscoveryResult {
 export interface ChangeAnalysisResult {
   is_event: boolean;
   summary: string;
+  tldr: string;
+  highlights: string[];
+  articles: Article[];
+  is_breaking: boolean;
 }
 
 // ── API request / response shapes ───────────────────────────────────
 export interface CreateScoutRequest {
   query: string;
   email: string;
+  expiresAt?: string; // ISO timestamp, optional — frontend sends parsed value
 }
 
 export interface CreateScoutResponse {

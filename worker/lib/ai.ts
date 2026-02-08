@@ -1,4 +1,5 @@
-import type { Source, ChangeAnalysisResult } from "../types";
+import type { Source, ChangeAnalysisResult, Article } from "../types";
+import { SCOUT_CONFIG } from "../config";
 
 const MODEL = "@cf/meta/llama-3.1-8b-instruct-fp8" as const;
 
@@ -15,10 +16,15 @@ export async function discoverSources(
 }
 
 /**
- * Event Analysis
+ * Event Analysis — richer version.
  *
  * When a page diff is detected, the LLM decides whether it's a
- * meaningful event related to the user's query or just noise.
+ * meaningful event and extracts:
+ *   - TLDR (one-liner)
+ *   - Detailed summary
+ *   - Key highlights / what changed
+ *   - Article info (titles, URLs, images)
+ *   - Whether it's breaking news
  */
 export async function analyzeChange(
   ai: Ai,
@@ -26,16 +32,15 @@ export async function analyzeChange(
   oldText: string,
   newText: string,
 ): Promise<ChangeAnalysisResult> {
-  // Truncate texts to stay within token limits
-  const maxLen = 1500;
+  const maxLen = SCOUT_CONFIG.maxAiTextLength;
   const oldTrunc = oldText.slice(0, maxLen);
   const newTrunc = newText.slice(0, maxLen);
 
-  const prompt = `You are an event detection system. A user is monitoring for:
+  const prompt = `You are an event detection and news analysis system. A user is monitoring for:
 
 "${query}"
 
-A web page has changed. Here is the OLD content (excerpt):
+A web page (Google News search results) has changed. Here is the OLD content (excerpt):
 ---
 ${oldTrunc}
 ---
@@ -47,13 +52,23 @@ ${newTrunc}
 
 Determine if this change represents a meaningful event related to the user's intent.
 Ignore minor changes like timestamps, ad rotations, session IDs, or layout tweaks.
-Focus on substantive changes: new articles, new headlines, new products, availability changes, price drops, announcements, etc.
+Focus on substantive changes: new articles, new headlines, price drops, announcements, etc.
+
+If it IS a meaningful event, extract the following:
+1. "tldr": A single-sentence headline summary (max 15 words)
+2. "summary": A detailed 2-4 sentence description of what happened, what changed, and why it matters
+3. "highlights": An array of 2-5 key bullet points about what's new or changed
+4. "articles": An array of articles you can identify from the new content. For each article include:
+   - "title": the article headline
+   - "url": the article URL if visible in the content (or empty string if not)
+   - "snippet": a 1-sentence description of the article
+5. "is_breaking": true if this seems like breaking or urgent news, false otherwise
 
 Return ONLY valid JSON:
-{"is_event": true/false, "summary": "one-sentence description of what changed"}
+{"is_event": true, "tldr": "...", "summary": "...", "highlights": ["...", "..."], "articles": [{"title": "...", "url": "...", "snippet": "..."}], "is_breaking": true/false}
 
 If the change is NOT meaningful, return:
-{"is_event": false, "summary": "no meaningful change detected"}`;
+{"is_event": false, "tldr": "", "summary": "no meaningful change detected", "highlights": [], "articles": [], "is_breaking": false}`;
 
   const response = await ai.run(MODEL, {
     messages: [{ role: "user", content: prompt }],
@@ -61,22 +76,62 @@ If the change is NOT meaningful, return:
 
   try {
     const text = "response" in response ? (response.response ?? "") : "";
-    const jsonMatch = text.match(/\{[\s\S]*?\}/);
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
-      return { is_event: false, summary: "Could not parse AI response" };
+      return {
+        is_event: false,
+        summary: "Could not parse AI response",
+        tldr: "",
+        highlights: [],
+        articles: [],
+        is_breaking: false,
+      };
     }
-    const parsed = JSON.parse(jsonMatch[0]) as ChangeAnalysisResult;
+    const parsed = JSON.parse(jsonMatch[0]) as {
+      is_event?: boolean;
+      tldr?: string;
+      summary?: string;
+      highlights?: string[];
+      articles?: Array<{
+        title?: string;
+        url?: string;
+        snippet?: string;
+        imageUrl?: string;
+      }>;
+      is_breaking?: boolean;
+    };
+
+    // Sanitize articles
+    const articles: Article[] = (parsed.articles || [])
+      .filter((a) => a.title)
+      .map((a) => ({
+        title: a.title || "Untitled",
+        url: a.url || "",
+        snippet: a.snippet || "",
+        imageUrl: a.imageUrl || undefined,
+      }));
+
     return {
       is_event: Boolean(parsed.is_event),
       summary: parsed.summary || "Change detected",
+      tldr: parsed.tldr || (parsed.summary || "Change detected").slice(0, 80),
+      highlights: Array.isArray(parsed.highlights)
+        ? parsed.highlights.filter(Boolean)
+        : [],
+      articles,
+      is_breaking: Boolean(parsed.is_breaking),
     };
   } catch {
-    return { is_event: false, summary: "Could not parse AI response" };
+    return {
+      is_event: false,
+      summary: "Could not parse AI response",
+      tldr: "",
+      highlights: [],
+      articles: [],
+      is_breaking: false,
+    };
   }
 }
-
-/** Max previous event summaries to check for semantic duplicates */
-const DEDUPE_LOOKBACK = 5;
 
 /**
  * Check if a new event is about the same news as any recent event.
@@ -91,7 +146,7 @@ export async function isDuplicateEvent(
   if (previousSummaries.length === 0) return false;
 
   const recent = previousSummaries
-    .slice(0, DEDUPE_LOOKBACK)
+    .slice(0, SCOUT_CONFIG.dedupeLookback)
     .map((s, i) => `${i + 1}. ${s}`)
     .join("\n");
 

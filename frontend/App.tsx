@@ -23,6 +23,7 @@ function saveScoutIds(ids: string[]): void {
 
 function App() {
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
   const [pendingQuery, setPendingQuery] = useState("");
   const [scouts, setScouts] = useState<ScoutStatusResponse[]>([]);
   const [loadingScouts, setLoadingScouts] = useState(true);
@@ -67,8 +68,8 @@ function App() {
   }
 
   // Dialog submit → create scout
-  async function handleCreateScout(email: string) {
-    const result = await createScout({ query: pendingQuery, email });
+  async function handleCreateScout(email: string, expiresAt?: string) {
+    const result = await createScout({ query: pendingQuery, email, expiresAt });
 
     // Save to local storage
     const ids = loadScoutIds();
@@ -79,7 +80,7 @@ function App() {
       duration: 5000,
     });
 
-    // Refresh the list
+    setSearchQuery("");
     await refreshScouts();
   }
 
@@ -101,7 +102,11 @@ function App() {
       <div className="mx-auto max-w-2xl px-6 py-16">
         {/* Hero / Search */}
         <div className="mb-12">
-          <HeroSearch onSubmit={handleSearch} />
+          <HeroSearch
+            value={searchQuery}
+            onChange={setSearchQuery}
+            onSubmit={handleSearch}
+          />
         </div>
 
         {/* Scout Form Dialog */}
@@ -122,16 +127,15 @@ function App() {
         {/* Footer */}
         <footer className="text-muted-foreground mt-16 text-center text-xs">
           <p>
-            Built on{" "}
+            built with ❤️ by{" "}
             <a
-              href="https://workers.cloudflare.com/"
+              href="https://github.com/navincodesalot/cf_ai_terascout"
               target="_blank"
               rel="noopener noreferrer"
               className="hover:text-foreground underline underline-offset-2"
             >
-              Cloudflare Workers
-            </a>{" "}
-            with Durable Objects, Workflows, and Workers AI
+              navin
+            </a>
           </p>
         </footer>
       </div>

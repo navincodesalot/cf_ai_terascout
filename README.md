@@ -1,105 +1,135 @@
 # Terascout
 
-AI-powered web monitoring on Cloudflare. Describe what you want to track in plain English—Terascout discovers sources, polls for changes, and emails you when something relevant happens.
+AI-powered event intelligence on Cloudflare. Natural language in, structured email alerts out. Polls sources every 10 minutes, uses an LLM to filter noise, deduplicates, and notifies you when something real happens.
 
-Inspired by [Yutori Scouts](https://yutori.com/scouts).
+**Check it out at:** [terascout.vael.ai](https://terascout.vael.ai)
 
-## Stack
+## Cloudflare Technologies Used
 
-- **Frontend**: React + Vite + Tailwind + shadcn/ui
-- **Backend**: Cloudflare Workers, Durable Objects, Workflows
-- **AI**: Cloudflare Workers AI (Llama) for change analysis
-- **Source discovery**: Google News search URLs with LLM-chosen time range (1d/7d/30d or none)
-- **Email**: Resend
+| Technology                                   | What it does here                                                                          |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| **Workers AI** (`Llama-3.1-8b-instruct-fp8`) | Query extraction, change analysis, semantic deduplication — 3 LLM calls per decision cycle |
+| **Durable Objects** (SQLite)                 | Per-scout isolated state — config, snapshots, events, email counters                       |
+| **Workflows**                                | Durable polling loop with per-step retries, timeouts, and exponential backoff              |
+| **Workers**                                  | API + SPA (React) hosting in a single deploy                                               |
+| **Assets**                                   | SPA serving with `not_found_handling: "single-page-application"`                           |
 
 ## Setup
 
 ```bash
+git clone https://github.com/navincodesalot/cf_ai_terascout
 pnpm install
+cp .env.example .env   # add your RESEND_API_KEY
+pnpm dev               # http://localhost:8787
 ```
-
-### Environment variables
-
-Copy `.env.example` to `.env`:
-
-```bash
-cp .env.example .env
-```
-
-| Variable         | Required | Description                                                                     |
-| ---------------- | -------- | ------------------------------------------------------------------------------- |
-| `RESEND_API_KEY` | Yes      | Resend API key for email notifications. Get at [resend.com](https://resend.com) |
 
 For production:
 
 ```bash
-wrangler secret put RESEND_API_KEY
-```
-
-## Development
-
-```bash
-pnpm dev
-```
-
-Runs the Worker locally with `wrangler dev`. The frontend is served from the Worker.
-
-## Build & Deploy
-
-```bash
-pnpm build
+pnpx wrangler secret put RESEND_API_KEY
 pnpm deploy
 ```
 
-Or push to `main` for GitHub Actions deploy.
+Or push to `main` — GitHub Actions deploys via `wrangler-action`.
 
-## How it works
+### Prerequisites
 
-### 1. Scout creation (Worker API)
+Node 22+, pnpm 10+, Cloudflare account (free tier works), [Resend](https://resend.com) API key.
 
-User submits `{ query, email }` to `POST /api/scouts`.
+## How It Works
 
-| Step | What happens                                                                                                        |
-| ---- | ------------------------------------------------------------------------------------------------------------------- |
-| 1    | **LLM: query + time range** — Extracts search terms and decides time sensitivity                                    |
-|      | • "lmk about spacex IPO" → `{ query: "spacex IPO", time_range: "7d" }`                                              |
-|      | • "history of tesla" → `{ query: "tesla history", time_range: null }`                                               |
-| 2    | **Build Google News URL** — `https://news.google.com/search?q=spacex+IPO+when:7d` (or no `when` for general topics) |
-| 3    | **Save config** — Store `{ scoutId, query, email, sources }` in Durable Object                                      |
-| 4    | **Start workflow** — Create `ScoutWorkflow` instance with `scoutId`                                                 |
+### Workers AI — 3 LLM calls per cycle
 
-### 2. Polling loop (Workflow, every 10 min)
+1. **Query extraction** (`ai.ts → extractSearchQueryWithTime`) — _"keep me in the loop on today's Super Bowl pre-game events"_ → `{ query: "Super Bowl pre-game", time_range: "1d" }`. Strips filler, picks a Google News time filter.
 
-| Step | What happens                                                                             |
-| ---- | ---------------------------------------------------------------------------------------- |
-| 1    | **Load config** — Fetch config + sources from DO                                         |
-| 2    | **For each source**                                                                      |
-|      | • **Fetch** — GET Google News URL, extract text, hash it                                 |
-|      | • **Diff** — Compare hash to last snapshot (from DO)                                     |
-|      | • **Save snapshot** — Update DO with new hash/text                                       |
-|      | • **If content changed**                                                                 |
-|      | - **LLM: event analysis** — "Is this change meaningful?" (new articles, headlines, etc.) |
-|      | - **If meaningful**                                                                      |
-|      | - **LLM: deduplication** — Compare summary to last 5 events. Same news? Skip.            |
-|      | - **If not duplicate**                                                                   |
-|      | - **Record event** — Store in DO (idempotent by eventId)                                 |
-|      | - **Send email** — Resend, one per distinct event                                        |
-| 3    | **Sleep** — 10 minutes, then repeat                                                      |
+2. **Change analysis** (`ai.ts → analyzeChange`) — Fetches the Google News page, SHA-256 hashes it, compares to last snapshot. If changed, the LLM diffs old vs new text and extracts: TL;DR, summary, highlights, article titles/URLs, and a breaking news flag.
 
-### 3. When emails are sent
+3. **Semantic dedup** (`ai.ts → isDuplicateEvent`) — Compares the new event summary against the last 5 events. Same story rephrased across polls gets silently dropped.
 
-An email is sent only when **all** of these are true:
+### Durable Objects — per-scout state
 
-| #   | Condition                                                                   |
-| --- | --------------------------------------------------------------------------- |
-| 1   | Content hash changed (page is different from last poll)                     |
-| 2   | LLM says it's a meaningful event (not ads, timestamps, layout noise)        |
-| 3   | LLM says it's not a duplicate of recent events (same story, different poll) |
-| 4   | Event hasn't been recorded before (idempotency)                             |
+Each scout is a `ScoutDO` instance with 4 SQLite tables:
 
-### 4. Summary
+- `config` — query, email, `expiresAt` (hard stop timestamp)
+- `sources` — URL, `lastHash`, `lastText` for content diffing
+- `events` — idempotent by `eventId` = SHA-256(`sourceUrl|oldHash|newHash`)
+- `email_counter` — daily send count, auto-resets
 
-- **One source per scout**: Google News search URL
-- **Time filter**: LLM picks `when:1d` / `when:7d` / `when:30d` for time-sensitive queries, or none for general
-- **Deduplication**: LLM compares new events to last 5 to avoid repeat emails for the same news
-- **Resilience**: Sources that fail to fetch are skipped; workflow continues
+DOs instead of D1 because each scout is an independent actor with its own lifecycle — no shared-table contention, co-located storage.
+
+### Workflows — durable polling loop
+
+`ScoutWorkflow` runs up to 200 cycles per instance:
+
+```
+Load config → check expiration → check email rate limit
+  → fetch source (retries: 2, timeout: 30s)
+  → hash diff → LLM analysis → LLM dedup
+  → record event (idempotent) → send email (retries: 3, exp backoff)
+  → sleep 10 min → repeat
+```
+
+Per-instance lifecycle (not a shared cron). Failed fetches skip that source, workflow continues. Hard stop: workflow checks `expiresAt` each cycle and terminates when expired.
+
+### Smart expiration
+
+The frontend uses [chrono-node](https://github.com/wanasit/chrono) to parse time references from the query — _"today's events"_ auto-selects end-of-day. Manual datetime picker as fallback. Default: 3 days.
+
+### Email alerts
+
+Rich HTML via Resend: breaking news banner, TL;DR, detailed summary, key highlights, and individual article links with snippets. Rate-limited to 10/day per scout (configurable).
+
+## Configuration
+
+`worker/config.ts` — change and redeploy:
+
+```typescript
+export const SCOUT_CONFIG = {
+  maxEmailsPerScoutPerDay: 10,
+  defaultLifetimeHours: 72,
+  maxLifetimeHours: 168,
+  pollInterval: "10 minutes",
+  maxCycles: 200,
+  maxAiTextLength: 2500,
+  dedupeLookback: 5,
+};
+```
+
+## Project Structure
+
+```
+worker/
+├── index.ts              # API routes (create/read/delete scouts)
+├── scout-do.ts           # Durable Object — per-scout SQLite state
+├── scout-workflow.ts     # Workflow — polling loop with retry/backoff
+├── config.ts             # Tunable defaults (email limits, intervals)
+├── types.ts              # Shared TypeScript interfaces
+└── lib/
+    ├── ai.ts             # 3 LLM calls: query extraction, analysis, dedup
+    ├── email.ts          # Resend email — TLDR + highlights + articles
+    └── fetcher.ts        # Fetch + text extraction + SHA-256 hashing
+
+frontend/
+├── App.tsx               # Scout creation + list management
+├── components/
+│   ├── HeroSearch.tsx    # Search input
+│   ├── ScoutForm.tsx     # Creation dialog with chrono-node NLP time parsing
+│   └── ScoutList.tsx     # Active scouts — events, articles, countdowns
+└── lib/
+    ├── api.ts            # Typed fetch wrappers
+    └── utils.ts          # Tailwind cn() helper
+```
+
+## Stack
+
+| Layer    | Technology                                              |
+| -------- | ------------------------------------------------------- |
+| Frontend | React 19, Vite, Tailwind CSS 4, shadcn/ui, chrono-node  |
+| Backend  | Cloudflare Workers, Durable Objects (SQLite), Workflows |
+| AI       | Cloudflare Workers AI — Llama 3.1 8B                    |
+| Email    | Resend                                                  |
+| CI/CD    | GitHub Actions → wrangler-action                        |
+
+## License
+
+MIT
