@@ -52,13 +52,26 @@ Example response:
     }
 
     // Validate and clean sources
-    return parsed.sources
+    const sources = parsed.sources
       .filter((s) => s.url && s.label && s.url.startsWith("http"))
       .map((s) => ({
-        url: s.url,
+        url: sanitizeUrl(s.url),
         label: s.label,
         strategy: "html_diff" as const,
-      }));
+      }))
+      .filter((s) => {
+        try {
+          new URL(s.url);
+          return true;
+        } catch {
+          return false;
+        }
+      });
+
+    if (sources.length === 0) {
+      return await getDefaultSources(ai, query);
+    }
+    return sources;
   } catch (err) {
     console.error("AI source discovery parse error:", err);
     return await getDefaultSources(ai, query);
@@ -124,6 +137,37 @@ If the change is NOT meaningful, return:
   } catch {
     return { is_event: false, summary: "Could not parse AI response" };
   }
+}
+
+/**
+ * Fix common LLM URL mistakes: spaces instead of dots in domain, spaces in path.
+ * e.g. "https://www espn com nfl news" → "https://www.espn.com/nfl/news"
+ */
+function sanitizeUrl(url: string): string {
+  try {
+    new URL(url);
+    return url;
+  } catch {
+    // Not a valid URL — fix spaces
+  }
+  let fixed = url.trim();
+  // Replace " com " or " .com " etc. with ".com/" to separate domain from path
+  const tlds = ["com", "org", "net", "io", "co", "edu", "gov"];
+  for (const tld of tlds) {
+    fixed = fixed.replace(
+      new RegExp(`\\s+\\.?${tld}\\s+`, "gi"),
+      `.${tld}/`,
+    );
+  }
+  // In the host part (between // and next /), replace spaces with dots
+  const match = fixed.match(/^(https?:\/\/)([^/]+)(\/.*)?$/);
+  if (match) {
+    const [, scheme, host, path = ""] = match;
+    const fixedHost = host.replace(/\s+/g, ".");
+    const fixedPath = path.replace(/\s+/g, "/");
+    fixed = scheme + fixedHost + fixedPath;
+  }
+  return fixed;
 }
 
 /**
