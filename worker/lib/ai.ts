@@ -42,13 +42,13 @@ Example response:
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
       console.error("AI source discovery: no JSON found in response:", text);
-      return getDefaultSources(query);
+      return await getDefaultSources(ai, query);
     }
 
     const parsed = JSON.parse(jsonMatch[0]) as SourceDiscoveryResult;
 
     if (!parsed.sources || parsed.sources.length === 0) {
-      return getDefaultSources(query);
+      return await getDefaultSources(ai, query);
     }
 
     // Validate and clean sources
@@ -61,7 +61,7 @@ Example response:
       }));
   } catch (err) {
     console.error("AI source discovery parse error:", err);
-    return getDefaultSources(query);
+    return await getDefaultSources(ai, query);
   }
 }
 
@@ -127,11 +127,15 @@ If the change is NOT meaningful, return:
 }
 
 /**
- * Fallback: if the LLM fails to discover sources, generate
- * a reasonable Google News search URL for the query.
+ * Fallback: if the LLM fails to discover sources, extract a search-friendly
+ * query from the user's intent and use Google News.
+ *
+ * Conversational phrasing like "lmk how things are with X" yields poor results.
+ * We ask the LLM for a condensed query (e.g. "spacex IPO") that works better.
  */
-function getDefaultSources(query: string): Source[] {
-  const encoded = encodeURIComponent(query);
+async function getDefaultSources(ai: Ai, query: string): Promise<Source[]> {
+  const searchQuery = await extractSearchQuery(ai, query);
+  const encoded = encodeURIComponent(searchQuery);
   return [
     {
       url: `https://news.google.com/search?q=${encoded}`,
@@ -139,4 +143,37 @@ function getDefaultSources(query: string): Source[] {
       strategy: "html_diff",
     },
   ];
+}
+
+/**
+ * Use the LLM to extract a short, search-friendly query from the user's intent.
+ * Removes conversational filler ("lmk", "how things are", etc.) and keeps key terms.
+ */
+async function extractSearchQuery(ai: Ai, query: string): Promise<string> {
+  const prompt = `A user said: "${query}"
+
+Extract a short search query (2-7 words) for a news search. Use only the key terms—no conversational phrasing like "lmk", "keep me updated", "how things are", etc. Just the topic.
+
+Examples:
+- "lmk how things are with spacex and their supposed IPO" → "spacex IPO"
+- "keep me updated on NVIDIA GPU drops" → "NVIDIA GPU drops"
+- "what's going on with apple stock" → "apple stock"
+
+Return ONLY the search query, no quotes, no explanation.`;
+
+  try {
+    const response = await ai.run(MODEL, {
+      messages: [{ role: "user", content: prompt }],
+    });
+    const text = ("response" in response ? response.response ?? "" : "").trim();
+    // Take first line, strip quotes, limit length
+    const cleaned = text
+      .split("\n")[0]
+      .replace(/^["']|["']$/g, "")
+      .trim()
+      .slice(0, 80);
+    return cleaned || query;
+  } catch {
+    return query;
+  }
 }
