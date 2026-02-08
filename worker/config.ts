@@ -22,7 +22,7 @@ export const SCOUT_CONFIG = {
   maxSnapshotTextLength: 5000,
 
   /** Max text length sent to AI for analysis (chars) */
-  maxAiTextLength: 2500,
+  maxAiTextLength: 4500,
 
   /** Max recent events to check for deduplication */
   dedupeLookback: 5,

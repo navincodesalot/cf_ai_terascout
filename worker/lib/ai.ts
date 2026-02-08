@@ -54,15 +54,19 @@ Determine if this change represents a meaningful event related to the user's int
 Ignore minor changes like timestamps, ad rotations, session IDs, or layout tweaks.
 Focus on substantive changes: new articles, new headlines, price drops, announcements, etc.
 
-If it IS a meaningful event, extract the following:
-1. "tldr": A single-sentence headline summary (max 15 words)
-2. "summary": A detailed 2-4 sentence description of what happened, what changed, and why it matters
-3. "highlights": An array of 2-5 key bullet points about what's new or changed
-4. "articles": An array of articles you can identify from the new content. For each article include:
-   - "title": the article headline
-   - "url": the article URL if visible in the content (or empty string if not)
-   - "snippet": a 1-sentence description of the article
-5. "is_breaking": true if this seems like breaking or urgent news, false otherwise
+If it IS a meaningful event, extract the following. NEVER invent or infer details—only use what is explicitly stated in the OLD/NEW content above. When unsure, omit. Better to be accurate and show less than to fabricate.
+
+When the content DOES name people, places, or events: include those names. When it does NOT: stay general. Never guess or assume.
+
+1. "tldr": One sentence (max 15 words). Include specific names/places only if they appear in the content. If the content doesn't name anyone, a general summary is fine. Never invent names.
+
+2. "summary": 2-4 sentences. Extract only facts present in the content. If names are mentioned, include them. If not, describe what happened generally—do not guess who was involved.
+
+3. "highlights": 2-5 distinct facts from the content. Each must be directly supported by the text. Omit a highlight if you're not sure it's in the content.
+
+4. "articles": Array from the new content. Extract only articles you can clearly identify. For "snippet", use details from the article—never invent. If you can't extract an article reliably, omit it.
+
+5. "is_breaking": true if breaking/urgent, false otherwise.
 
 Return ONLY valid JSON:
 {"is_event": true, "tldr": "...", "summary": "...", "highlights": ["...", "..."], "articles": [{"title": "...", "url": "...", "snippet": "..."}], "is_breaking": true/false}
