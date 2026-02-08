@@ -137,6 +137,15 @@ async function handleDeleteScout(
     // Workflow may not exist or already completed — that's fine
   }
 
+  // Wipe DO storage so the scout is fully removed
+  try {
+    const doId = env.SCOUT_DO.idFromName(scoutId);
+    const stub = env.SCOUT_DO.get(doId);
+    await stub.fetch(new Request("http://do/wipe", { method: "POST" }));
+  } catch {
+    // DO may not exist — that's fine
+  }
+
   return Response.json({ ok: true, scoutId });
 }
 

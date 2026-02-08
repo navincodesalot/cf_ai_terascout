@@ -80,6 +80,11 @@ export class ScoutDO extends DurableObject<Env> {
         return this.getEvents();
       }
 
+      // ── Wipe (clear all storage) ────────────────────────────────
+      if (path === "/wipe" && request.method === "POST") {
+        return this.wipe();
+      }
+
       return new Response("Not found", { status: 404 });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unknown error";
@@ -214,5 +219,13 @@ export class ScoutDO extends DurableObject<Env> {
     }));
 
     return Response.json(events);
+  }
+
+  /** Clear all stored data (config, sources, events). Used when deleting a scout. */
+  private wipe(): Response {
+    this.sql.exec("DELETE FROM config");
+    this.sql.exec("DELETE FROM sources");
+    this.sql.exec("DELETE FROM events");
+    return Response.json({ ok: true });
   }
 }

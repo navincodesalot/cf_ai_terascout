@@ -4,34 +4,30 @@
   "main": "worker/index.ts",
   "compatibility_date": "2025-09-27",
   "assets": {
-    "not_found_handling": "single-page-application"
+    "not_found_handling": "single-page-application",
   },
   "observability": {
-    "enabled": true
+    "enabled": true,
   },
   "compatibility_flags": ["nodejs_compat"],
 
   /** Durable Objects — one per scout */
   "durable_objects": {
-    "bindings": [
-      { "name": "SCOUT_DO", "class_name": "ScoutDO" }
-    ]
+    "bindings": [{ "name": "SCOUT_DO", "class_name": "ScoutDO" }],
   },
-  "migrations": [
-    { "tag": "v1", "new_sqlite_classes": ["ScoutDO"] }
-  ],
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ScoutDO"] }],
 
   /** Workflows — background polling loop */
   "workflows": [
     {
       "name": "scout-workflow",
       "binding": "SCOUT_WORKFLOW",
-      "class_name": "ScoutWorkflow"
-    }
+      "class_name": "ScoutWorkflow",
+    },
   ],
 
   /** Workers AI — source discovery + event analysis */
   "ai": {
-    "binding": "AI"
-  }
+    "binding": "AI",
+  },
 }
