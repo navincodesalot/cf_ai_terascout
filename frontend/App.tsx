@@ -1,123 +1,142 @@
-import { useState } from "react";
-import reactLogo from "./assets/react.svg";
-import viteLogo from "/vite.svg";
-import cloudflareLogo from "./assets/Cloudflare_Logo.svg";
-import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { useCallback, useEffect, useState } from "react";
+import { Toaster, toast } from "sonner";
+import { HeroSearch } from "@/components/HeroSearch";
+import { ScoutForm } from "@/components/ScoutForm";
+import { ScoutList } from "@/components/ScoutList";
+import { createScout, getScout, deleteScout } from "@/lib/api";
+import type { ScoutStatusResponse } from "../worker/types";
+
+const STORAGE_KEY = "terascout_scout_ids";
+
+function loadScoutIds(): string[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? (JSON.parse(raw) as string[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveScoutIds(ids: string[]): void {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(ids));
+}
 
 function App() {
-  const [count, setCount] = useState(0);
-  const [name, setName] = useState("unknown");
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [pendingQuery, setPendingQuery] = useState("");
+  const [scouts, setScouts] = useState<ScoutStatusResponse[]>([]);
+  const [loadingScouts, setLoadingScouts] = useState(true);
+
+  // Load saved scouts on mount
+  const refreshScouts = useCallback(async () => {
+    const ids = loadScoutIds();
+    if (ids.length === 0) {
+      setScouts([]);
+      setLoadingScouts(false);
+      return;
+    }
+
+    setLoadingScouts(true);
+    const results: ScoutStatusResponse[] = [];
+    const validIds: string[] = [];
+
+    for (const id of ids) {
+      try {
+        const data = await getScout(id);
+        results.push(data);
+        validIds.push(id);
+      } catch {
+        // Scout may have been deleted or doesn't exist
+      }
+    }
+
+    // Clean up invalid IDs
+    saveScoutIds(validIds);
+    setScouts(results);
+    setLoadingScouts(false);
+  }, []);
+
+  useEffect(() => {
+    refreshScouts();
+  }, [refreshScouts]);
+
+  // Search bar submit → open dialog
+  function handleSearch(query: string) {
+    setPendingQuery(query);
+    setDialogOpen(true);
+  }
+
+  // Dialog submit → create scout
+  async function handleCreateScout(email: string) {
+    const result = await createScout({ query: pendingQuery, email });
+
+    // Save to local storage
+    const ids = loadScoutIds();
+    ids.unshift(result.scoutId);
+    saveScoutIds(ids);
+
+    toast.success("Scout created! We'll email you when something happens.", {
+      duration: 5000,
+    });
+
+    // Refresh the list
+    await refreshScouts();
+  }
+
+  // Delete scout
+  async function handleDelete(scoutId: string) {
+    try {
+      await deleteScout(scoutId);
+      const ids = loadScoutIds().filter((id) => id !== scoutId);
+      saveScoutIds(ids);
+      setScouts((prev) => prev.filter((s) => s.config.scoutId !== scoutId));
+      toast.success("Scout deleted.");
+    } catch {
+      toast.error("Failed to delete scout.");
+    }
+  }
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-background to-muted/30">
-      <div className="mx-auto max-w-2xl px-6 py-12">
-        {/* Header */}
-        <header className="mb-12 flex flex-col items-center gap-4">
-          <div className="flex items-center gap-4">
-            <a
-              href="https://vite.dev"
-              target="_blank"
-              rel="noreferrer"
-              className="opacity-80 transition-opacity hover:opacity-100"
-            >
-              <img
-                src={viteLogo}
-                alt="Vite"
-                className="h-8 w-8"
-              />
-            </a>
-            <a
-              href="https://react.dev"
-              target="_blank"
-              rel="noreferrer"
-              className="opacity-80 transition-opacity hover:opacity-100"
-            >
-              <img
-                src={reactLogo}
-                alt="React"
-                className="h-8 w-8"
-              />
-            </a>
+    <div className="dark min-h-screen bg-background text-foreground">
+      <div className="mx-auto max-w-2xl px-6 py-16">
+        {/* Hero / Search */}
+        <div className="mb-12">
+          <HeroSearch onSubmit={handleSearch} />
+        </div>
+
+        {/* Scout Form Dialog */}
+        <ScoutForm
+          query={pendingQuery}
+          open={dialogOpen}
+          onOpenChange={setDialogOpen}
+          onSubmit={handleCreateScout}
+        />
+
+        {/* Active Scouts */}
+        <ScoutList
+          scouts={scouts}
+          onDelete={handleDelete}
+          loading={loadingScouts}
+        />
+
+        {/* Footer */}
+        <footer className="text-muted-foreground mt-16 text-center text-xs">
+          <p>
+            Built on{" "}
             <a
               href="https://workers.cloudflare.com/"
               target="_blank"
-              rel="noreferrer"
-              className="opacity-80 transition-opacity hover:opacity-100"
+              rel="noopener noreferrer"
+              className="underline underline-offset-2 hover:text-foreground"
             >
-              <img
-                src={cloudflareLogo}
-                alt="Cloudflare"
-                className="h-8 w-8"
-              />
-            </a>
-          </div>
-          <h1 className="text-3xl font-bold tracking-tight">
-            Vite + React + Cloudflare
-          </h1>
-          <p className="text-muted-foreground text-center text-sm">
-            Terascout — Edit <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs">frontend/App.tsx</code> and save to test HMR
+              Cloudflare Workers
+            </a>{" "}
+            with Durable Objects, Workflows, and Workers AI
           </p>
-        </header>
-
-        {/* Cards */}
-        <div className="space-y-6">
-          <Card>
-            <CardHeader>
-              <CardTitle>Counter</CardTitle>
-              <CardDescription>
-                Click the button to increment the count
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <Button
-                onClick={() => setCount((c) => c + 1)}
-                aria-label="increment"
-              >
-                Count is {count}
-              </Button>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>API Demo</CardTitle>
-              <CardDescription>
-                Fetch data from the Worker API
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <Button
-                variant="secondary"
-                onClick={() => {
-                  fetch("/api/")
-                    .then((res) => res.json() as Promise<{ name: string }>)
-                    .then((data) => setName(data.name));
-                }}
-                aria-label="get name"
-              >
-                Name from API: {name}
-              </Button>
-            </CardContent>
-            <CardFooter>
-              <p className="text-muted-foreground text-xs">
-                Edit <code className="rounded bg-muted px-1.5 py-0.5 font-mono">worker/index.ts</code> to change the API response
-              </p>
-            </CardFooter>
-          </Card>
-        </div>
-
-        <p className="text-muted-foreground mt-8 text-center text-sm">
-          Click on the logos to learn more
-        </p>
+        </footer>
       </div>
+
+      <Toaster theme="dark" position="bottom-right" />
     </div>
   );
 }

@@ -4,40 +4,40 @@ overview: "Build a Cloudflare-native event intelligence app: user describes an i
 todos:
   - id: bindings
     content: Configure wrangler.jsonc with DO, Workflow, AI, and Browser Rendering bindings + migrations
-    status: pending
+    status: completed
   - id: types
     content: Create shared types (ScoutConfig, ScoutEvent, Source, Env) in worker/types.ts
-    status: pending
+    status: completed
   - id: durable-object
     content: Implement ScoutDO with config storage, per-source snapshots, and event stream with per-event notified flag
-    status: pending
+    status: completed
   - id: helpers-ai
     content: "Implement worker/lib/ai.ts: source discovery (intent -> sources JSON) and content analysis (diff -> event detection)"
-    status: pending
+    status: completed
   - id: helpers-fetcher
     content: "Implement worker/lib/fetcher.ts: plain fetch with HTML text extraction (Browser Rendering optional stretch goal)"
-    status: pending
+    status: completed
   - id: helpers-email
     content: "Implement worker/lib/email.ts: send event notification via Resend"
-    status: pending
+    status: completed
   - id: workflow
     content: "Implement ScoutWorkflow: load config -> fetch each source -> diff snapshots -> LLM analyze changes -> create events -> notify -> sleep -> loop"
-    status: pending
+    status: completed
   - id: api-routes
     content: "Build API routes in worker/index.ts: POST /api/scouts, GET /api/scouts/:id, DELETE /api/scouts/:id"
-    status: pending
+    status: completed
   - id: shadcn-components
     content: Install required shadcn/ui components (dialog, input, label, badge, sonner)
-    status: pending
+    status: completed
   - id: frontend-ui
     content: "Build frontend: HeroSearch bar, ScoutForm dialog (just query + email), ScoutList showing active scouts + events"
-    status: pending
+    status: completed
   - id: frontend-app
     content: Compose App.tsx with all components, clean dark-mode layout
-    status: pending
+    status: completed
   - id: test-e2e
     content: "Test locally with wrangler dev, verify full flow: create scout -> workflow runs -> event detected -> email sent"
-    status: pending
+    status: completed
 isProject: false
 ---
 
@@ -45,7 +45,7 @@ isProject: false
 
 ## Core Concept
 
-This is **event intelligence**, not a crawler. The user describes an intent in plain English. The LLM plans *what* to watch and *how*. Workflows poll known sources and diff state. Durable Objects track an event stream. One email fires per distinct state transition. No schedules exposed to the user. No product bloat.
+This is **event intelligence**, not a crawler. The user describes an intent in plain English. The LLM plans _what_ to watch and _how_. Workflows poll known sources and diff state. Durable Objects track an event stream. One email fires per distinct state transition. No schedules exposed to the user. No product bloat.
 
 ## Architecture
 
@@ -89,8 +89,6 @@ flowchart TB
     WF <-->|"Read/write state"| DO
 ```
 
-
-
 ## Tech Stack (all free tier)
 
 - **Frontend**: React 19, Vite 7, Tailwind CSS v4, shadcn/ui (already scaffolded)
@@ -105,29 +103,29 @@ flowchart TB
 
 ### LLM Call 1: Source Discovery (at scout creation)
 
-User says: *"Keep me updated on NVIDIA GPU drops"*
+User says: _"Keep me updated on NVIDIA GPU drops"_
 
 LLM returns structured JSON:
 
 ```json
 {
-    "event_type": "product_availability",
-    "sources": [
-        {
-            "url": "https://store.nvidia.com/en-us/geforce/store/",
-            "strategy": "html_diff",
-            "label": "NVIDIA Store"
-        },
-        {
-            "url": "https://www.bestbuy.com/site/searchpage.jsp?st=nvidia+gpu",
-            "strategy": "html_diff",
-            "label": "Best Buy"
-        }
-    ]
+  "event_type": "product_availability",
+  "sources": [
+    {
+      "url": "https://store.nvidia.com/en-us/geforce/store/",
+      "strategy": "html_diff",
+      "label": "NVIDIA Store"
+    },
+    {
+      "url": "https://www.bestbuy.com/site/searchpage.jsp?st=nvidia+gpu",
+      "strategy": "html_diff",
+      "label": "Best Buy"
+    }
+  ]
 }
 ```
 
-The LLM does NOT fetch. It only decides *what* to watch and *how*. This is the "agent planning" step.
+The LLM does NOT fetch. It only decides _what_ to watch and _how_. This is the "agent planning" step.
 
 ### LLM Call 2: Event Analysis (during polling, only when diff detected)
 
@@ -135,8 +133,8 @@ When a source's HTML changes, the LLM sees the old vs new text and decides:
 
 ```json
 {
-    "is_event": true,
-    "summary": "RTX 5090 Founders Edition is now showing 'Add to Cart' (was 'Out of Stock')"
+  "is_event": true,
+  "summary": "RTX 5090 Founders Edition is now showing 'Add to Cart' (was 'Out of Stock')"
 }
 ```
 
@@ -160,11 +158,11 @@ Each detected state transition becomes a new event with its own `notified` flag:
 
 ```ts
 interface ScoutEvent {
-    eventId: string; // hash(sourceUrl + oldHash + newHash + detectedAt_rounded)
-    sourceUrl: string;
-    summary: string;
-    detectedAt: string;
-    notified: boolean;
+  eventId: string; // hash(sourceUrl + oldHash + newHash + detectedAt_rounded)
+  sourceUrl: string;
+  summary: string;
+  detectedAt: string;
+  notified: boolean;
 }
 ```
 
@@ -206,18 +204,18 @@ terascout/
 
 ```jsonc
 {
-    "durable_objects": {
-        "bindings": [{ "name": "SCOUT_DO", "class_name": "ScoutDO" }],
+  "durable_objects": {
+    "bindings": [{ "name": "SCOUT_DO", "class_name": "ScoutDO" }],
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ScoutDO"] }],
+  "workflows": [
+    {
+      "name": "scout-workflow",
+      "binding": "SCOUT_WORKFLOW",
+      "class_name": "ScoutWorkflow",
     },
-    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ScoutDO"] }],
-    "workflows": [
-        {
-            "name": "scout-workflow",
-            "binding": "SCOUT_WORKFLOW",
-            "class_name": "ScoutWorkflow",
-        },
-    ],
-    "ai": { "binding": "AI" },
+  ],
+  "ai": { "binding": "AI" },
 }
 ```
 
@@ -316,4 +314,3 @@ For a demo with ~3 scouts polling every 10 minutes:
 - **No user-facing schedule controls** -- polling interval is an internal implementation detail (10 min). Shows engineering restraint
 - **SQLite-backed DOs** -- structured storage for sources, snapshots, events within each scout
 - **Resend for email** -- already in deps, simple SDK, generous free tier
-
