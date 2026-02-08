@@ -21,9 +21,7 @@ export async function createScout(
   return res.json() as Promise<CreateScoutResponse>;
 }
 
-export async function getScout(
-  scoutId: string,
-): Promise<ScoutStatusResponse> {
+export async function getScout(scoutId: string): Promise<ScoutStatusResponse> {
   const res = await fetch(`${BASE}/scouts/${scoutId}`);
   if (!res.ok) {
     throw new Error("Scout not found");

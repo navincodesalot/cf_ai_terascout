@@ -1,14 +1,47 @@
-import type { Source, SourceDiscoveryResult, ChangeAnalysisResult } from "../types";
+import type {
+  Source,
+  SourceDiscoveryResult,
+  ChangeAnalysisResult,
+} from "../types";
+import { searchTavily, tavilyResultsToSources } from "./tavily";
+import { filterValidSources } from "./source-validation";
 
-const MODEL = "@cf/meta/llama-3.2-3b-instruct" as const;
+// Upgraded from 3B — better at change analysis. (3B tended to hallucinate URLs; source discovery now uses Tavily.)
+const MODEL = "@cf/meta/llama-3.1-8b-instruct-fp8" as const;
 
-/**
- * LLM Call 1: Intent → Sources
- *
- * Given a user's plain-English intent, returns 2-3 high-signal
- * public URLs to monitor. The LLM plans *what* to watch, not *how* to fetch.
- */
+/** Llama has no web search—it hallucinates URLs. Use Tavily for real sources. */
 export async function discoverSources(
+  ai: Ai,
+  query: string,
+  tavilyApiKey?: string,
+): Promise<Source[]> {
+  // 1. If Tavily API is available, use real web search (no hallucination)
+  if (tavilyApiKey?.trim()) {
+    try {
+      const searchQuery = await extractSearchQuery(ai, query);
+      const results = await searchTavily(tavilyApiKey, searchQuery, {
+        maxResults: 5,
+        topic: "news",
+        timeRange: "week",
+      });
+      let sources = tavilyResultsToSources(results, 3);
+      if (sources.length > 0) {
+        sources = await filterValidSources(sources);
+        if (sources.length > 0) {
+          return sources;
+        }
+      }
+    } catch (err) {
+      console.error("Tavily search failed, falling back:", err);
+    }
+  }
+
+  // 2. Fallback: LLM extracts search query → use Google News (always valid URL)
+  return getDefaultSources(ai, query);
+}
+
+/** @deprecated LLM hallucinates URLs—use Tavily when available. Kept for fallback only. */
+export async function discoverSourcesFromLLM(
   ai: Ai,
   query: string,
 ): Promise<Source[]> {
@@ -37,22 +70,15 @@ Example response:
   });
 
   try {
-    // Extract JSON from the response (handle potential markdown wrapping)
-    const text = "response" in response ? response.response ?? "" : "";
+    const text = "response" in response ? (response.response ?? "") : "";
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
-      console.error("AI source discovery: no JSON found in response:", text);
-      return await getDefaultSources(ai, query);
+      return [];
     }
-
     const parsed = JSON.parse(jsonMatch[0]) as SourceDiscoveryResult;
+    if (!parsed.sources?.length) return [];
 
-    if (!parsed.sources || parsed.sources.length === 0) {
-      return await getDefaultSources(ai, query);
-    }
-
-    // Validate and clean sources
-    const sources = parsed.sources
+    return parsed.sources
       .filter((s) => s.url && s.label && s.url.startsWith("http"))
       .map((s) => ({
         url: sanitizeUrl(s.url),
@@ -67,14 +93,8 @@ Example response:
           return false;
         }
       });
-
-    if (sources.length === 0) {
-      return await getDefaultSources(ai, query);
-    }
-    return sources;
-  } catch (err) {
-    console.error("AI source discovery parse error:", err);
-    return await getDefaultSources(ai, query);
+  } catch {
+    return [];
   }
 }
 
@@ -124,7 +144,7 @@ If the change is NOT meaningful, return:
   });
 
   try {
-    const text = "response" in response ? response.response ?? "" : "";
+    const text = "response" in response ? (response.response ?? "") : "";
     const jsonMatch = text.match(/\{[\s\S]*?\}/);
     if (!jsonMatch) {
       return { is_event: false, summary: "Could not parse AI response" };
@@ -154,10 +174,7 @@ function sanitizeUrl(url: string): string {
   // Replace " com " or " .com " etc. with ".com/" to separate domain from path
   const tlds = ["com", "org", "net", "io", "co", "edu", "gov"];
   for (const tld of tlds) {
-    fixed = fixed.replace(
-      new RegExp(`\\s+\\.?${tld}\\s+`, "gi"),
-      `.${tld}/`,
-    );
+    fixed = fixed.replace(new RegExp(`\\s+\\.?${tld}\\s+`, "gi"), `.${tld}/`);
   }
   // In the host part (between // and next /), replace spaces with dots
   const match = fixed.match(/^(https?:\/\/)([^/]+)(\/.*)?$/);
@@ -171,11 +188,9 @@ function sanitizeUrl(url: string): string {
 }
 
 /**
- * Fallback: if the LLM fails to discover sources, extract a search-friendly
- * query from the user's intent and use Google News.
- *
- * Conversational phrasing like "lmk how things are with X" yields poor results.
- * We ask the LLM for a condensed query (e.g. "spacex IPO") that works better.
+ * Fallback: extract search query from user intent → use Google News URL.
+ * Google News search URLs are always valid and return current results.
+ * No hallucinated URLs.
  */
 async function getDefaultSources(ai: Ai, query: string): Promise<Source[]> {
   const searchQuery = await extractSearchQuery(ai, query);
@@ -183,7 +198,7 @@ async function getDefaultSources(ai: Ai, query: string): Promise<Source[]> {
   return [
     {
       url: `https://news.google.com/search?q=${encoded}`,
-      label: "Google News",
+      label: `Google News: ${searchQuery.slice(0, 40)}`,
       strategy: "html_diff",
     },
   ];
@@ -209,7 +224,9 @@ Return ONLY the search query, no quotes, no explanation.`;
     const response = await ai.run(MODEL, {
       messages: [{ role: "user", content: prompt }],
     });
-    const text = ("response" in response ? response.response ?? "" : "").trim();
+    const text = (
+      "response" in response ? (response.response ?? "") : ""
+    ).trim();
     // Take first line, strip quotes, limit length
     const cleaned = text
       .split("\n")[0]

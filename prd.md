@@ -56,6 +56,12 @@ No auth for v1. Everything is keyed by a generated `scoutId`. Rate limiting and 
 - **Cloudflare Workflows**
   - Handles long-running execution
   - Durable sleep, retries, continuation
+  - Per-source error handling (skips failed sources, continues with others)
+
+- **Source discovery**
+  - **Tavily** (optional): Real web search API for current URLs. Set `TAVILY_API_KEY` via `wrangler secret put`. Without it, falls back to Google News search URLs.
+  - **Source validation**: HEAD/GET checks before adding; filters out unreachable URLs.
+  - Workers AI Llama used only for query extraction and change analysis—not for URL generation (LLMs hallucinate URLs).
 
 ### Tooling
 
@@ -71,23 +77,25 @@ No auth for v1. Everything is keyed by a generated `scoutId`. Rate limiting and 
 terascout/
 ├── package.json
 ├── pnpm-lock.yaml
-├── wrangler.toml
-├── .github/
-│   └── workflows/
-│       └── deploy.yml
+├── wrangler.jsonc
+├── .github/workflows/deploy.yml
 ├── frontend/              # React + Vite + Tailwind + shadcn
 │   ├── index.html
 │   ├── src/
 │   │   ├── main.tsx
 │   │   ├── App.tsx        # Search bar, dialog, history
 │   │   └── components/
-│   ├── tailwind.config.ts
-│   └── postcss.config.cjs
-└── backend/               # Workers / DO / Workflows
+│   └── ...
+└── worker/                # Workers / DO / Workflows
     ├── index.ts           # Worker entry: APIs + static assets
-    ├── scouts-do.ts       # Durable Object per scout
-    └── workflows/
-        └── scoutWorkflow.ts
+    ├── scout-do.ts        # Durable Object per scout
+    ├── scout-workflow.ts  # Polling loop
+    └── lib/
+        ├── ai.ts          # Source discovery + change analysis (LLM)
+        ├── tavily.ts      # Tavily web search (real URLs)
+        ├── source-validation.ts  # URL reachability checks
+        ├── fetcher.ts     # Fetch + HTML text extraction
+        └── email.ts       # Resend email sender
 ```
 
 ### pnpm workspace config (root `package.json`)

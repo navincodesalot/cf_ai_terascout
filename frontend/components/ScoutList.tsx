@@ -67,7 +67,7 @@ export function ScoutList({ scouts, onDelete, loading }: ScoutListProps) {
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                  className="text-muted-foreground hover:text-destructive h-8 w-8"
                   onClick={() => onDelete(scout.config.scoutId)}
                 >
                   <Trash2 className="h-4 w-4" />
@@ -81,7 +81,7 @@ export function ScoutList({ scouts, onDelete, loading }: ScoutListProps) {
                   {scout.events.slice(0, 5).map((event) => (
                     <div
                       key={event.eventId}
-                      className="rounded-md border border-border/50 bg-muted/30 px-3 py-2"
+                      className="border-border/50 bg-muted/30 rounded-md border px-3 py-2"
                     >
                       <p className="text-sm">{event.summary}</p>
                       <p className="text-muted-foreground mt-1 text-xs">
@@ -110,7 +110,7 @@ export function ScoutList({ scouts, onDelete, loading }: ScoutListProps) {
                         href={src.url}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="underline underline-offset-2 hover:text-foreground"
+                        className="hover:text-foreground underline underline-offset-2"
                       >
                         {src.label}
                       </a>

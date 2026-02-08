@@ -36,7 +36,7 @@ export function HeroSearch({ onSubmit }: HeroSearchProps) {
             placeholder='e.g. "Keep me updated on NVIDIA GPU drops"'
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            className="h-12 rounded-xl border-border/50 bg-card pl-10 pr-4 text-base shadow-sm transition-shadow focus:shadow-md"
+            className="border-border/50 bg-card h-12 rounded-xl pr-4 pl-10 text-base shadow-sm transition-shadow focus:shadow-md"
           />
         </div>
         <p className="text-muted-foreground mt-2 text-center text-xs">

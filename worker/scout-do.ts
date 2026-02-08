@@ -1,10 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
-import type {
-  ScoutConfig,
-  ScoutEvent,
-  Source,
-  SourceSnapshot,
-} from "./types";
+import type { ScoutConfig, ScoutEvent, Source, SourceSnapshot } from "./types";
 
 /**
  * One Durable Object per scout.
@@ -94,9 +89,7 @@ export class ScoutDO extends DurableObject<Env> {
 
   // ── Config ────────────────────────────────────────────────────────
 
-  private saveConfig(
-    body: ScoutConfig,
-  ): Response {
+  private saveConfig(body: ScoutConfig): Response {
     const { scoutId, query, email, sources, createdAt } = body;
 
     // Upsert config row
@@ -162,9 +155,11 @@ export class ScoutDO extends DurableObject<Env> {
     return Response.json(row as unknown as SourceSnapshot);
   }
 
-  private saveSnapshot(
-    body: { url: string; contentHash: string; text: string },
-  ): Response {
+  private saveSnapshot(body: {
+    url: string;
+    contentHash: string;
+    text: string;
+  }): Response {
     const now = new Date().toISOString();
     this.sql.exec(
       `UPDATE sources SET lastHash = ?, lastText = ?, lastCheckedAt = ? WHERE url = ?`,
@@ -178,9 +173,7 @@ export class ScoutDO extends DurableObject<Env> {
 
   // ── Events ────────────────────────────────────────────────────────
 
-  private recordEvent(
-    body: Omit<ScoutEvent, "notified">,
-  ): Response {
+  private recordEvent(body: Omit<ScoutEvent, "notified">): Response {
     // Idempotency: if eventId already exists, skip
     const existing = this.sql
       .exec("SELECT eventId FROM events WHERE eventId = ?", body.eventId)

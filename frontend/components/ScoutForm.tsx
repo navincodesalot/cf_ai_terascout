@@ -17,7 +17,12 @@ interface ScoutFormProps {
   onSubmit: (email: string) => Promise<void>;
 }
 
-export function ScoutForm({ query, open, onOpenChange, onSubmit }: ScoutFormProps) {
+export function ScoutForm({
+  query,
+  open,
+  onOpenChange,
+  onSubmit,
+}: ScoutFormProps) {
   const [email, setEmail] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -56,7 +61,7 @@ export function ScoutForm({ query, open, onOpenChange, onSubmit }: ScoutFormProp
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-2">
             <Label htmlFor="query">Watching for</Label>
-            <div className="text-muted-foreground rounded-md border border-border/50 bg-muted/50 px-3 py-2 text-sm">
+            <div className="text-muted-foreground border-border/50 bg-muted/50 rounded-md border px-3 py-2 text-sm">
               {query}
             </div>
           </div>
@@ -76,9 +81,7 @@ export function ScoutForm({ query, open, onOpenChange, onSubmit }: ScoutFormProp
             </p>
           </div>
 
-          {error && (
-            <p className="text-sm text-destructive">{error}</p>
-          )}
+          {error && <p className="text-destructive text-sm">{error}</p>}
 
           <Button type="submit" className="w-full" disabled={loading}>
             {loading ? "Setting up scout..." : "Start Watching"}

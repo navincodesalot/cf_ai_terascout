@@ -97,7 +97,7 @@ function App() {
   }
 
   return (
-    <div className="dark min-h-screen bg-background text-foreground">
+    <div className="dark bg-background text-foreground min-h-screen">
       <div className="mx-auto max-w-2xl px-6 py-16">
         {/* Hero / Search */}
         <div className="mb-12">
@@ -127,7 +127,7 @@ function App() {
               href="https://workers.cloudflare.com/"
               target="_blank"
               rel="noopener noreferrer"
-              className="underline underline-offset-2 hover:text-foreground"
+              className="hover:text-foreground underline underline-offset-2"
             >
               Cloudflare Workers
             </a>{" "}

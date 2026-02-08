@@ -60,7 +60,8 @@ flowchart TB
     end
 
     subgraph creation [Scout Creation]
-        LLM_Plan["Workers AI: Intent -> Sources"]
+        SourceDiscovery["Tavily Search / Google News (real URLs)"]
+        LLM_Query["Workers AI: Intent -> Search Query"]
     end
 
     subgraph DO [Durable Object per Scout]
@@ -78,8 +79,9 @@ flowchart TB
     end
 
     SPA -->|"POST /api/scouts"| API
-    API --> LLM_Plan
-    LLM_Plan -->|"Save config + sources"| DO
+    API --> LLM_Query
+    LLM_Query --> SourceDiscovery
+    SourceDiscovery -->|"Save config + sources"| DO
     API -->|"Start workflow"| WF
     FetchSrc --> Diff --> Analyze
     Analyze -->|"Yes, new event"| Emit
@@ -96,36 +98,23 @@ flowchart TB
 - **State**: Durable Objects with SQLite (1 per scout -- config, snapshots, event stream)
 - **Execution**: Cloudflare Workflows (durable sleep, retries, self-looping)
 - **Web Fetching**: Plain `fetch()` + HTML text extraction (Browser Rendering as optional stretch)
-- **LLM**: Workers AI `@cf/meta/llama-3.2-3b-instruct` (cheapest, 10K neurons/day free)
+- **LLM**: Workers AI `@cf/meta/llama-3.1-8b-instruct-fp8` (change analysis + query extraction). LLMs have no web access—they hallucinate URLs.
+- **Source Discovery**: Tavily Search API (optional, real web search). Set `TAVILY_API_KEY` via `wrangler secret put`. Without it, falls back to Google News search URLs.
+- **Source Validation**: HEAD/GET checks filter unreachable URLs before adding to scouts.
 - **Email**: Resend (API key as Cloudflare secret)
 
-## The Two LLM Calls (and why this isn't a wrapper)
+## Source Discovery (LLMs can't search the web)
 
-### LLM Call 1: Source Discovery (at scout creation)
+**LLMs have no web access.** They hallucinate URLs that look plausible but often don't exist. We use real search instead:
+
+- **Tavily** (optional): Real web search API. Returns current URLs from news/general search. Validates URLs before adding.
+- **Fallback**: LLM extracts search query (e.g. "NVIDIA GPU drops") → Google News search URL. Always valid.
+
+### LLM Call 1: Query Extraction (at scout creation)
 
 User says: _"Keep me updated on NVIDIA GPU drops"_
 
-LLM returns structured JSON:
-
-```json
-{
-  "event_type": "product_availability",
-  "sources": [
-    {
-      "url": "https://store.nvidia.com/en-us/geforce/store/",
-      "strategy": "html_diff",
-      "label": "NVIDIA Store"
-    },
-    {
-      "url": "https://www.bestbuy.com/site/searchpage.jsp?st=nvidia+gpu",
-      "strategy": "html_diff",
-      "label": "Best Buy"
-    }
-  ]
-}
-```
-
-The LLM does NOT fetch. It only decides _what_ to watch and _how_. This is the "agent planning" step.
+LLM extracts: `"NVIDIA GPU drops"` (no conversational filler). That becomes the search query for Tavily or Google News.
 
 ### LLM Call 2: Event Analysis (during polling, only when diff detected)
 
@@ -180,7 +169,9 @@ terascout/
 │   ├── scout-do.ts             # Durable Object: config, snapshots, events
 │   ├── scout-workflow.ts       # Workflow: fetch -> diff -> analyze -> notify -> sleep -> loop
 │   ├── lib/
-│   │   ├── ai.ts               # Workers AI: source discovery + event analysis
+│   │   ├── ai.ts               # Source discovery (Tavily/fallback) + change analysis (LLM)
+│   │   ├── tavily.ts           # Tavily Search API (real web search)
+│   │   ├── source-validation.ts # URL reachability validation
 │   │   ├── fetcher.ts          # Fetch + extract text from HTML
 │   │   └── email.ts            # Resend email sender
 │   └── types.ts                # ScoutConfig, ScoutEvent, Source, Env
@@ -195,7 +186,7 @@ terascout/
 │   │   ├── utils.ts            # cn() util
 │   │   └── api.ts              # Frontend API client
 │   └── index.css               # Tailwind styles
-└── .env.example                # RESEND_API_KEY
+└── .env.example                # RESEND_API_KEY, TAVILY_API_KEY (optional)
 ```
 
 ## Implementation Details
@@ -244,7 +235,7 @@ Self-looping `WorkflowEntrypoint`. Fixed internal interval (~10 min for demo, co
 
 - **Step "load-config"**: Fetch config + sources from DO
 - **Step "check-sources"**: For each source:
-  - `fetch(url)` the page, extract visible text
+  - `fetch(url)` the page, extract visible text (skip source on failure—don't fail entire workflow)
   - Hash the extracted text
   - Compare with last snapshot hash from DO
   - If changed: send old text + new text + user query to Workers AI for event analysis
@@ -265,8 +256,10 @@ Minimal:
 ### 5. Helpers
 
 - **[worker/lib/ai.ts](worker/lib/ai.ts)**:
-  - `discoverSources(ai, query)` -- prompt: "Given this user intent, return JSON array of 2-3 high-signal public URLs to monitor." Uses `@cf/meta/llama-3.2-3b-instruct`
-  - `analyzeChange(ai, query, oldText, newText)` -- prompt: "Did a meaningful event related to [query] occur? Return JSON." Uses same model
+  - `discoverSources(ai, query, tavilyApiKey?)` -- If Tavily key set: search Tavily, validate URLs, return real sources. Else: LLM extracts query → Google News URL. No LLM URL hallucination.
+  - `analyzeChange(ai, query, oldText, newText)` -- "Did a meaningful event occur?" Uses `@cf/meta/llama-3.1-8b-instruct-fp8`
+- **[worker/lib/tavily.ts](worker/lib/tavily.ts)**: `searchTavily(apiKey, query)` -- Tavily Search API, returns real URLs from web search
+- **[worker/lib/source-validation.ts](worker/lib/source-validation.ts)**: `filterValidSources(sources)` -- HEAD/GET check, filters unreachable URLs
 - **[worker/lib/fetcher.ts](worker/lib/fetcher.ts)**: `fetchPageText(url)` -- fetches URL, strips HTML tags, returns clean text (simple regex/string approach, no heavy parsing lib)
 - **[worker/lib/email.ts](worker/lib/email.ts)**: `sendEventEmail(apiKey, to, scoutQuery, event)` -- uses Resend SDK. Clean subject line like "Terascout: RTX 5090 now in stock". Minimal HTML body with summary + source link
 

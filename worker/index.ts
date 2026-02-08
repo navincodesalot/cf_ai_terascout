@@ -71,8 +71,12 @@ async function handleCreateScout(
 
   const scoutId = crypto.randomUUID();
 
-  // LLM Call 1: Intent → Source Discovery
-  const sources = await discoverSources(env.AI, body.query.trim());
+  // Source discovery: Tavily web search (real URLs) or fallback to Google News
+  const sources = await discoverSources(
+    env.AI,
+    body.query.trim(),
+    env.TAVILY_API_KEY,
+  );
 
   const config: ScoutConfig = {
     scoutId,
@@ -103,10 +107,7 @@ async function handleCreateScout(
   return Response.json(response, { status: 201 });
 }
 
-async function handleGetScout(
-  scoutId: string,
-  env: Env,
-): Promise<Response> {
+async function handleGetScout(scoutId: string, env: Env): Promise<Response> {
   const doId = env.SCOUT_DO.idFromName(scoutId);
   const stub = env.SCOUT_DO.get(doId);
 
@@ -125,10 +126,7 @@ async function handleGetScout(
   return Response.json(response);
 }
 
-async function handleDeleteScout(
-  scoutId: string,
-  env: Env,
-): Promise<Response> {
+async function handleDeleteScout(scoutId: string, env: Env): Promise<Response> {
   // Terminate the workflow
   try {
     const instance = await env.SCOUT_WORKFLOW.get(scoutId);

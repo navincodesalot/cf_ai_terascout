@@ -44,19 +44,30 @@ export class ScoutWorkflow extends WorkflowEntrypoint<Env, WorkflowParams> {
 
       // ── Step 2: Check each source ──────────────────────────────
       for (const source of config.sources) {
-        // Fetch the page
-        const fetchResult = await step.do(
-          `fetch-${cycle}-${source.label}`,
-          {
-            retries: { limit: 2, delay: "5 seconds", backoff: "linear" },
-            timeout: "30 seconds",
-          },
-          async () => {
-            const text = await fetchPageText(source.url);
-            const hash = await hashText(text);
-            return { text, hash };
-          },
-        );
+        // Fetch the page (skip source on failure — don't fail entire workflow)
+        let fetchResult: { text: string; hash: string } | null = null;
+        try {
+          fetchResult = await step.do(
+            `fetch-${cycle}-${source.label}`,
+            {
+              retries: { limit: 2, delay: "5 seconds", backoff: "linear" },
+              timeout: "30 seconds",
+            },
+            async () => {
+              const text = await fetchPageText(source.url);
+              const hash = await hashText(text);
+              return { text, hash };
+            },
+          );
+        } catch (err) {
+          console.error(
+            `[scout ${scoutId}] Source ${source.label} (${source.url}) failed:`,
+            err,
+          );
+          continue; // skip this source, check others
+        }
+
+        if (!fetchResult) continue;
 
         // Get last snapshot from DO
         const lastSnapshot = await step.do(
@@ -74,24 +85,21 @@ export class ScoutWorkflow extends WorkflowEntrypoint<Env, WorkflowParams> {
         const hasChanged = oldHash !== "" && oldHash !== fetchResult.hash;
 
         // Save updated snapshot regardless
-        await step.do(
-          `save-snapshot-${cycle}-${source.label}`,
-          async () => {
-            const doId = this.env.SCOUT_DO.idFromName(scoutId);
-            const stub = this.env.SCOUT_DO.get(doId);
-            await stub.fetch(
-              new Request("http://do/snapshot", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  url: source.url,
-                  contentHash: fetchResult.hash,
-                  text: fetchResult.text,
-                }),
+        await step.do(`save-snapshot-${cycle}-${source.label}`, async () => {
+          const doId = this.env.SCOUT_DO.idFromName(scoutId);
+          const stub = this.env.SCOUT_DO.get(doId);
+          await stub.fetch(
+            new Request("http://do/snapshot", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                url: source.url,
+                contentHash: fetchResult.hash,
+                text: fetchResult.text,
               }),
-            );
-          },
-        );
+            }),
+          );
+        });
 
         // If content changed, analyze with LLM
         if (hasChanged) {
@@ -135,7 +143,10 @@ export class ScoutWorkflow extends WorkflowEntrypoint<Env, WorkflowParams> {
                     }),
                   }),
                 );
-                return (await res.json()) as { ok: boolean; duplicate: boolean };
+                return (await res.json()) as {
+                  ok: boolean;
+                  duplicate: boolean;
+                };
               },
             );
 
@@ -144,7 +155,11 @@ export class ScoutWorkflow extends WorkflowEntrypoint<Env, WorkflowParams> {
               await step.do(
                 `email-${cycle}-${source.label}`,
                 {
-                  retries: { limit: 3, delay: "10 seconds", backoff: "exponential" },
+                  retries: {
+                    limit: 3,
+                    delay: "10 seconds",
+                    backoff: "exponential",
+                  },
                 },
                 async () => {
                   await sendEventEmail(
