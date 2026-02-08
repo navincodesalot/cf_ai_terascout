@@ -1,105 +1,21 @@
-import type {
-  Source,
-  SourceDiscoveryResult,
-  ChangeAnalysisResult,
-} from "../types";
-import { searchTavily, tavilyResultsToSources } from "./tavily";
-import { filterValidSources } from "./source-validation";
+import type { Source, ChangeAnalysisResult } from "../types";
 
-// Upgraded from 3B — better at change analysis. (3B tended to hallucinate URLs; source discovery now uses Tavily.)
 const MODEL = "@cf/meta/llama-3.1-8b-instruct-fp8" as const;
 
-/** Llama has no web search—it hallucinates URLs. Use Tavily for real sources. */
+/**
+ * Always use search URLs (Google News) as sources.
+ * Search pages are dynamic—new articles appear when we poll. No fixed article URLs.
+ * (Tavily returns article URLs which rarely update; we avoid those.)
+ */
 export async function discoverSources(
   ai: Ai,
   query: string,
-  tavilyApiKey?: string,
 ): Promise<Source[]> {
-  // 1. If Tavily API is available, use real web search (no hallucination)
-  if (tavilyApiKey?.trim()) {
-    try {
-      const searchQuery = await extractSearchQuery(ai, query);
-      const results = await searchTavily(tavilyApiKey, searchQuery, {
-        maxResults: 5,
-        topic: "news",
-        timeRange: "week",
-      });
-      let sources = tavilyResultsToSources(results, 3);
-      if (sources.length > 0) {
-        sources = await filterValidSources(sources);
-        if (sources.length > 0) {
-          return sources;
-        }
-      }
-    } catch (err) {
-      console.error("Tavily search failed, falling back:", err);
-    }
-  }
-
-  // 2. Fallback: LLM extracts search query → use Google News (always valid URL)
-  return getDefaultSources(ai, query);
-}
-
-/** @deprecated LLM hallucinates URLs—use Tavily when available. Kept for fallback only. */
-export async function discoverSourcesFromLLM(
-  ai: Ai,
-  query: string,
-): Promise<Source[]> {
-  const prompt = `You are a web monitoring assistant. A user wants to track the following:
-
-"${query}"
-
-Your job is to return a JSON object with:
-- "event_type": a short label for the kind of event (e.g. "product_availability", "news_release", "price_drop")
-- "sources": an array of 2-3 public web pages that would be the best places to monitor for this event. Each source has:
-  - "url": the full URL of a real, publicly accessible web page
-  - "label": a short human-readable name for the source (e.g. "NVIDIA Store", "Best Buy")
-  - "strategy": always "html_diff"
-
-IMPORTANT:
-- Only return real, valid, publicly accessible URLs
-- Pick high-signal pages (product listing pages, official store pages, news pages)
-- Do NOT return API endpoints or pages behind authentication
-- Return ONLY valid JSON, no markdown, no explanation
-
-Example response:
-{"event_type":"product_availability","sources":[{"url":"https://store.nvidia.com/en-us/geforce/store/","label":"NVIDIA Store","strategy":"html_diff"},{"url":"https://www.bestbuy.com/site/searchpage.jsp?st=nvidia+gpu","label":"Best Buy","strategy":"html_diff"}]}`;
-
-  const response = await ai.run(MODEL, {
-    messages: [{ role: "user", content: prompt }],
-  });
-
-  try {
-    const text = "response" in response ? (response.response ?? "") : "";
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
-      return [];
-    }
-    const parsed = JSON.parse(jsonMatch[0]) as SourceDiscoveryResult;
-    if (!parsed.sources?.length) return [];
-
-    return parsed.sources
-      .filter((s) => s.url && s.label && s.url.startsWith("http"))
-      .map((s) => ({
-        url: sanitizeUrl(s.url),
-        label: s.label,
-        strategy: "html_diff" as const,
-      }))
-      .filter((s) => {
-        try {
-          new URL(s.url);
-          return true;
-        } catch {
-          return false;
-        }
-      });
-  } catch {
-    return [];
-  }
+  return getSearchSources(ai, query);
 }
 
 /**
- * LLM Call 2: Change Analysis
+ * Event Analysis
  *
  * When a page diff is detected, the LLM decides whether it's a
  * meaningful event related to the user's query or just noise.
@@ -131,7 +47,7 @@ ${newTrunc}
 
 Determine if this change represents a meaningful event related to the user's intent.
 Ignore minor changes like timestamps, ad rotations, session IDs, or layout tweaks.
-Focus on substantive changes: new products, availability changes, price drops, announcements, etc.
+Focus on substantive changes: new articles, new headlines, new products, availability changes, price drops, announcements, etc.
 
 Return ONLY valid JSON:
 {"is_event": true/false, "summary": "one-sentence description of what changed"}
@@ -159,66 +75,118 @@ If the change is NOT meaningful, return:
   }
 }
 
+/** Max previous event summaries to check for semantic duplicates */
+const DEDUPE_LOOKBACK = 5;
+
 /**
- * Fix common LLM URL mistakes: spaces instead of dots in domain, spaces in path.
- * e.g. "https://www espn com nfl news" → "https://www.espn.com/nfl/news"
+ * Check if a new event is about the same news as any recent event.
+ * Prevents multiple emails for the same story (e.g. same headline from different polls).
  */
-function sanitizeUrl(url: string): string {
+export async function isDuplicateEvent(
+  ai: Ai,
+  newSummary: string,
+  previousSummaries: string[],
+  query: string,
+): Promise<boolean> {
+  if (previousSummaries.length === 0) return false;
+
+  const recent = previousSummaries
+    .slice(0, DEDUPE_LOOKBACK)
+    .map((s, i) => `${i + 1}. ${s}`)
+    .join("\n");
+
+  const prompt = `A user is monitoring for: "${query}"
+
+NEW event summary: "${newSummary}"
+
+RECENT events we already notified about:
+${recent}
+
+Is the NEW event about the SAME news/story as any of the RECENT events? (e.g. same headline, same announcement, same development—just detected again or rephrased)
+
+Return ONLY valid JSON:
+{"is_duplicate": true/false}
+
+If it's clearly the same underlying news, return: {"is_duplicate": true}
+If it's different news, return: {"is_duplicate": false}`;
+
   try {
-    new URL(url);
-    return url;
+    const response = await ai.run(MODEL, {
+      messages: [{ role: "user", content: prompt }],
+    });
+    const text = "response" in response ? (response.response ?? "") : "";
+    const jsonMatch = text.match(/\{[\s\S]*?\}/);
+    if (!jsonMatch) return false; // on parse fail, allow through (don't over-dedupe)
+    const parsed = JSON.parse(jsonMatch[0]) as { is_duplicate?: boolean };
+    return Boolean(parsed.is_duplicate);
   } catch {
-    // Not a valid URL — fix spaces
+    return false;
   }
-  let fixed = url.trim();
-  // Replace " com " or " .com " etc. with ".com/" to separate domain from path
-  const tlds = ["com", "org", "net", "io", "co", "edu", "gov"];
-  for (const tld of tlds) {
-    fixed = fixed.replace(new RegExp(`\\s+\\.?${tld}\\s+`, "gi"), `.${tld}/`);
-  }
-  // In the host part (between // and next /), replace spaces with dots
-  const match = fixed.match(/^(https?:\/\/)([^/]+)(\/.*)?$/);
-  if (match) {
-    const [, scheme, host, path = ""] = match;
-    const fixedHost = host.replace(/\s+/g, ".");
-    const fixedPath = path.replace(/\s+/g, "/");
-    fixed = scheme + fixedHost + fixedPath;
-  }
-  return fixed;
+}
+
+/** Google News supports when:Xh, when:Xd, when:Xm in the query */
+const TIME_RANGES = ["1d", "7d", "30d"] as const;
+type TimeRange = (typeof TIME_RANGES)[number] | null;
+
+export interface SearchQueryResult {
+  query: string;
+  timeRange: TimeRange;
 }
 
 /**
- * Fallback: extract search query from user intent → use Google News URL.
- * Google News search URLs are always valid and return current results.
- * No hallucinated URLs.
+ * Extract search query from user intent → use Google News search URL.
+ * The search page is dynamic: new articles appear when we poll, so we're not
+ * stuck with fixed sources. One source per scout, always fresh.
  */
-async function getDefaultSources(ai: Ai, query: string): Promise<Source[]> {
-  const searchQuery = await extractSearchQuery(ai, query);
-  const encoded = encodeURIComponent(searchQuery);
+async function getSearchSources(ai: Ai, query: string): Promise<Source[]> {
+  const { query: searchQuery, timeRange } = await extractSearchQueryWithTime(
+    ai,
+    query,
+  );
+  // Google News: append when:Xd to narrow by publish date (e.g. when:7d = past week)
+  const fullQuery = timeRange
+    ? `${searchQuery} when:${timeRange}`
+    : searchQuery;
+  const encoded = encodeURIComponent(fullQuery);
+  const label = timeRange
+    ? `Google News: ${searchQuery.slice(0, 35)} (${timeRange})`
+    : `Google News: ${searchQuery.slice(0, 40)}`;
   return [
     {
       url: `https://news.google.com/search?q=${encoded}`,
-      label: `Google News: ${searchQuery.slice(0, 40)}`,
+      label,
       strategy: "html_diff",
     },
   ];
 }
 
 /**
- * Use the LLM to extract a short, search-friendly query from the user's intent.
- * Removes conversational filler ("lmk", "how things are", etc.) and keeps key terms.
+ * Use the LLM to extract a short search query and optional time range.
+ * Time-sensitive queries (breaking news, IPO, drops) get a filter; general topics don't.
  */
-async function extractSearchQuery(ai: Ai, query: string): Promise<string> {
+async function extractSearchQueryWithTime(
+  ai: Ai,
+  query: string,
+): Promise<SearchQueryResult> {
   const prompt = `A user said: "${query}"
 
-Extract a short search query (2-7 words) for a news search. Use only the key terms—no conversational phrasing like "lmk", "keep me updated", "how things are", etc. Just the topic.
+Extract a short search query (2-7 words) for Google News. Use only key terms—no filler like "lmk", "keep me updated", etc.
+
+Also decide if this query is TIME-SENSITIVE (wants recent/breaking news) or GENERAL (any time is fine):
+- Time-sensitive: IPO updates, stock drops, product launches, breaking news, "latest", "new", announcements → use a time filter
+- General: background info, history, "how things are", ongoing topics → no time filter
+
+Return ONLY valid JSON:
+{"query": "search terms here", "time_range": "1d" | "7d" | "30d" | null}
+
+Use time_range "1d" for very breaking (past day), "7d" for recent (past week), "30d" for past month. Use null for general (no filter).
 
 Examples:
-- "lmk how things are with spacex and their supposed IPO" → "spacex IPO"
-- "keep me updated on NVIDIA GPU drops" → "NVIDIA GPU drops"
-- "what's going on with apple stock" → "apple stock"
-
-Return ONLY the search query, no quotes, no explanation.`;
+- "lmk about spacex IPO" → {"query":"spacex IPO","time_range":"7d"}
+- "NVIDIA GPU drops" → {"query":"NVIDIA GPU drops","time_range":"7d"}
+- "apple stock news" → {"query":"apple stock","time_range":"7d"}
+- "history of tesla" → {"query":"tesla history","time_range":null}
+- "general info on quantum computing" → {"query":"quantum computing","time_range":null}`;
 
   try {
     const response = await ai.run(MODEL, {
@@ -227,14 +195,22 @@ Return ONLY the search query, no quotes, no explanation.`;
     const text = (
       "response" in response ? (response.response ?? "") : ""
     ).trim();
-    // Take first line, strip quotes, limit length
-    const cleaned = text
-      .split("\n")[0]
-      .replace(/^["']|["']$/g, "")
-      .trim()
-      .slice(0, 80);
-    return cleaned || query;
+    const jsonMatch = text.match(/\{[\s\S]*?\}/);
+    if (!jsonMatch) {
+      return { query: query.slice(0, 80), timeRange: "7d" };
+    }
+    const parsed = JSON.parse(jsonMatch[0]) as {
+      query?: string;
+      time_range?: string | null;
+    };
+    const q = (parsed.query ?? query).trim().slice(0, 80);
+    const tr = parsed.time_range;
+    const timeRange: TimeRange =
+      tr && TIME_RANGES.includes(tr as (typeof TIME_RANGES)[number])
+        ? (tr as TimeRange)
+        : null;
+    return { query: q || query, timeRange };
   } catch {
-    return query;
+    return { query: query.slice(0, 80), timeRange: "7d" };
   }
 }

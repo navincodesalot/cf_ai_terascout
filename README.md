@@ -9,7 +9,7 @@ Inspired by [Yutori Scouts](https://yutori.com/scouts).
 - **Frontend**: React + Vite + Tailwind + shadcn/ui
 - **Backend**: Cloudflare Workers, Durable Objects, Workflows
 - **AI**: Cloudflare Workers AI (Llama) for change analysis
-- **Source discovery**: [Tavily](https://tavily.com) web search or Google News fallback
+- **Source discovery**: Google News search URLs with LLM-chosen time range (1d/7d/30d or none)
 - **Email**: Resend
 
 ## Setup
@@ -26,16 +26,14 @@ Copy `.env.example` to `.env`:
 cp .env.example .env
 ```
 
-| Variable         | Required | Description                                                                                                                   |
-| ---------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `RESEND_API_KEY` | Yes      | Resend API key for email notifications. Get at [resend.com](https://resend.com)                                               |
-| `TAVILY_API_KEY` | No       | Tavily API key for real web search. Get at [app.tavily.com](https://app.tavily.com). Without it, uses Google News search URLs |
+| Variable         | Required | Description                                                                     |
+| ---------------- | -------- | ------------------------------------------------------------------------------- |
+| `RESEND_API_KEY` | Yes      | Resend API key for email notifications. Get at [resend.com](https://resend.com) |
 
-For production, set secrets via Wrangler:
+For production:
 
 ```bash
 wrangler secret put RESEND_API_KEY
-wrangler secret put TAVILY_API_KEY   # optional
 ```
 
 ## Development
@@ -57,10 +55,51 @@ Or push to `main` for GitHub Actions deploy.
 
 ## How it works
 
-1. **Create a scout** — Enter a query (e.g. "SpaceX IPO updates") and your email
-2. **Source discovery** — Tavily (if configured) or Google News finds real URLs to monitor. URLs are validated before adding
-3. **Polling** — A Workflow polls each source every 10 minutes, diffs content
-4. **Event detection** — When content changes, the LLM decides if it's a meaningful event
-5. **Notification** — You get one email per distinct event
+### 1. Scout creation (Worker API)
 
-Sources that fail to fetch are skipped; the workflow continues with the rest.
+User submits `{ query, email }` to `POST /api/scouts`.
+
+| Step | What happens                                                                                                        |
+| ---- | ------------------------------------------------------------------------------------------------------------------- |
+| 1    | **LLM: query + time range** — Extracts search terms and decides time sensitivity                                    |
+|      | • "lmk about spacex IPO" → `{ query: "spacex IPO", time_range: "7d" }`                                              |
+|      | • "history of tesla" → `{ query: "tesla history", time_range: null }`                                               |
+| 2    | **Build Google News URL** — `https://news.google.com/search?q=spacex+IPO+when:7d` (or no `when` for general topics) |
+| 3    | **Save config** — Store `{ scoutId, query, email, sources }` in Durable Object                                      |
+| 4    | **Start workflow** — Create `ScoutWorkflow` instance with `scoutId`                                                 |
+
+### 2. Polling loop (Workflow, every 10 min)
+
+| Step | What happens                                                                             |
+| ---- | ---------------------------------------------------------------------------------------- |
+| 1    | **Load config** — Fetch config + sources from DO                                         |
+| 2    | **For each source**                                                                      |
+|      | • **Fetch** — GET Google News URL, extract text, hash it                                 |
+|      | • **Diff** — Compare hash to last snapshot (from DO)                                     |
+|      | • **Save snapshot** — Update DO with new hash/text                                       |
+|      | • **If content changed**                                                                 |
+|      | - **LLM: event analysis** — "Is this change meaningful?" (new articles, headlines, etc.) |
+|      | - **If meaningful**                                                                      |
+|      | - **LLM: deduplication** — Compare summary to last 5 events. Same news? Skip.            |
+|      | - **If not duplicate**                                                                   |
+|      | - **Record event** — Store in DO (idempotent by eventId)                                 |
+|      | - **Send email** — Resend, one per distinct event                                        |
+| 3    | **Sleep** — 10 minutes, then repeat                                                      |
+
+### 3. When emails are sent
+
+An email is sent only when **all** of these are true:
+
+| #   | Condition                                                                   |
+| --- | --------------------------------------------------------------------------- |
+| 1   | Content hash changed (page is different from last poll)                     |
+| 2   | LLM says it's a meaningful event (not ads, timestamps, layout noise)        |
+| 3   | LLM says it's not a duplicate of recent events (same story, different poll) |
+| 4   | Event hasn't been recorded before (idempotency)                             |
+
+### 4. Summary
+
+- **One source per scout**: Google News search URL
+- **Time filter**: LLM picks `when:1d` / `when:7d` / `when:30d` for time-sensitive queries, or none for general
+- **Deduplication**: LLM compares new events to last 5 to avoid repeat emails for the same news
+- **Resilience**: Sources that fail to fetch are skipped; workflow continues

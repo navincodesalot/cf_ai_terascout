@@ -4,9 +4,9 @@ import {
   type WorkflowStep,
 } from "cloudflare:workers";
 import { fetchPageText, hashText } from "./lib/fetcher";
-import { analyzeChange } from "./lib/ai";
+import { analyzeChange, isDuplicateEvent } from "./lib/ai";
 import { sendEventEmail } from "./lib/email";
-import type { ScoutConfig, SourceSnapshot } from "./types";
+import type { ScoutConfig, ScoutEvent, SourceSnapshot } from "./types";
 
 interface WorkflowParams {
   scoutId: string;
@@ -116,6 +116,28 @@ export class ScoutWorkflow extends WorkflowEntrypoint<Env, WorkflowParams> {
           );
 
           if (analysis.is_event) {
+            // Check for semantic duplicate (same news as recent events)
+            const isDuplicate = await step.do(
+              `dedupe-${cycle}-${source.label}`,
+              async () => {
+                const doId = this.env.SCOUT_DO.idFromName(scoutId);
+                const stub = this.env.SCOUT_DO.get(doId);
+                const res = await stub.fetch(new Request("http://do/events"));
+                const events = (await res.json()) as ScoutEvent[];
+                const recentSummaries = events
+                  .slice(0, 5)
+                  .map((e) => e.summary)
+                  .filter(Boolean);
+                return isDuplicateEvent(
+                  this.env.AI,
+                  analysis.summary,
+                  recentSummaries,
+                  config.query,
+                );
+              },
+            );
+            if (isDuplicate) continue; // skip—same news, no email
+
             // Generate idempotent event ID
             const eventId = await step.do(
               `hash-event-${cycle}-${source.label}`,

@@ -59,15 +59,63 @@ No auth for v1. Everything is keyed by a generated `scoutId`. Rate limiting and 
   - Per-source error handling (skips failed sources, continues with others)
 
 - **Source discovery**
-  - **Tavily** (optional): Real web search API for current URLs. Set `TAVILY_API_KEY` via `wrangler secret put`. Without it, falls back to Google News search URLs.
-  - **Source validation**: HEAD/GET checks before adding; filters out unreachable URLs.
-  - Workers AI Llama used only for query extraction and change analysis—not for URL generation (LLMs hallucinate URLs).
+  - **Google News search URLs** only. The search page is dynamic—new articles appear when we poll. No fixed article URLs.
+  - **Time range**: LLM decides if query is time-sensitive (IPO, drops, breaking news) → adds `when:7d` etc. General topics get no filter.
+  - **Semantic deduplication**: LLM compares new events to last 5—skips email if same news.
+  - Workers AI Llama used for query extraction, time range, change analysis, and deduplication—not for URL generation (LLMs hallucinate URLs).
 
 ### Tooling
 
 - **pnpm** workspace
 - **GitHub Actions** CI/CD
 - **wrangler** for deploys
+
+---
+
+## Full flow: Scout creation → Email
+
+End-to-end flow from when a user creates a scout to when they receive an email.
+
+### 1. Scout creation (Worker API)
+
+User submits `{ query, email }` to `POST /api/scouts`.
+
+1. **LLM: query + time range** — Extracts search terms and decides time sensitivity:
+   - "lmk about spacex IPO" → `{ query: "spacex IPO", time_range: "7d" }`
+   - "history of tesla" → `{ query: "tesla history", time_range: null }`
+2. **Build Google News URL** — `https://news.google.com/search?q=spacex+IPO+when:7d` (or no `when` for general)
+3. **Save config** — Store `{ scoutId, query, email, sources: [{ url, label, strategy }] }` in Durable Object
+4. **Start workflow** — Create `ScoutWorkflow` instance with `scoutId`
+
+### 2. Polling loop (Workflow, every 10 min)
+
+1. **Load config** — Fetch config + sources from DO
+2. **For each source**:
+   - **Fetch** — GET the Google News URL, extract text, hash it
+   - **Diff** — Compare hash to last snapshot (from DO)
+   - **Save snapshot** — Update DO with new hash/text regardless
+   - **If content changed**:
+     - **LLM: event analysis** — "Is this change meaningful?" (new articles, headlines, etc.)
+     - **If meaningful**:
+       - **LLM: deduplication** — Compare summary to last 5 events. Same news? Skip.
+       - **If not duplicate**:
+         - **Record event** — Store in DO (idempotent by eventId)
+         - **Send email** — Resend, one per distinct event
+3. **Sleep** — 10 minutes, then repeat
+
+### 3. When emails are sent
+
+An email is sent only when **all** of these are true:
+
+- Content hash changed (page is different from last poll)
+- LLM says it's a meaningful event (not ads, timestamps, layout noise)
+- LLM says it's not a duplicate of recent events (same story, different poll)
+- Event hasn't been recorded before (idempotency)
+
+### 4. Sources and time
+
+- **One source per scout**: Google News search URL. Dynamic—new articles appear when we poll.
+- **Time filter**: `when:1d` / `when:7d` / `when:30d` for time-sensitive queries; none for general.
 
 ---
 
@@ -91,9 +139,7 @@ terascout/
     ├── scout-do.ts        # Durable Object per scout
     ├── scout-workflow.ts  # Polling loop
     └── lib/
-        ├── ai.ts          # Source discovery + change analysis (LLM)
-        ├── tavily.ts      # Tavily web search (real URLs)
-        ├── source-validation.ts  # URL reachability checks
+        ├── ai.ts          # Source discovery (Google News) + change analysis (LLM)
         ├── fetcher.ts     # Fetch + HTML text extraction
         └── email.ts       # Resend email sender
 ```

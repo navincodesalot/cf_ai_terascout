@@ -99,16 +99,15 @@ flowchart TB
 - **Execution**: Cloudflare Workflows (durable sleep, retries, self-looping)
 - **Web Fetching**: Plain `fetch()` + HTML text extraction (Browser Rendering as optional stretch)
 - **LLM**: Workers AI `@cf/meta/llama-3.1-8b-instruct-fp8` (change analysis + query extraction). LLMs have no web access—they hallucinate URLs.
-- **Source Discovery**: Tavily Search API (optional, real web search). Set `TAVILY_API_KEY` via `wrangler secret put`. Without it, falls back to Google News search URLs.
-- **Source Validation**: HEAD/GET checks filter unreachable URLs before adding to scouts.
+- **Source Discovery**: Google News search URLs only. The search page is dynamic—new articles appear when we poll. No fixed article URLs (Tavily article URLs rarely update).
 - **Email**: Resend (API key as Cloudflare secret)
 
-## Source Discovery (LLMs can't search the web)
+## Source Discovery (search URLs are dynamic)
 
-**LLMs have no web access.** They hallucinate URLs that look plausible but often don't exist. We use real search instead:
+**LLMs have no web access.** We use Google News search URLs—no fixed article URLs.
 
-- **Tavily** (optional): Real web search API. Returns current URLs from news/general search. Validates URLs before adding.
-- **Fallback**: LLM extracts search query (e.g. "NVIDIA GPU drops") → Google News search URL. Always valid.
+- **Google News search URL**: `https://news.google.com/search?q=${query}`. The page is dynamic—new articles appear when we poll. One source per scout, always fresh.
+- **LLM**: Extracts search query from user intent (e.g. "lmk about spacex IPO" → "spacex IPO"). No URL hallucination.
 
 ### LLM Call 1: Query Extraction (at scout creation)
 
@@ -169,9 +168,7 @@ terascout/
 │   ├── scout-do.ts             # Durable Object: config, snapshots, events
 │   ├── scout-workflow.ts       # Workflow: fetch -> diff -> analyze -> notify -> sleep -> loop
 │   ├── lib/
-│   │   ├── ai.ts               # Source discovery (Tavily/fallback) + change analysis (LLM)
-│   │   ├── tavily.ts           # Tavily Search API (real web search)
-│   │   ├── source-validation.ts # URL reachability validation
+│   │   ├── ai.ts               # Source discovery (Google News) + change analysis (LLM)
 │   │   ├── fetcher.ts          # Fetch + extract text from HTML
 │   │   └── email.ts            # Resend email sender
 │   └── types.ts                # ScoutConfig, ScoutEvent, Source, Env
@@ -186,7 +183,7 @@ terascout/
 │   │   ├── utils.ts            # cn() util
 │   │   └── api.ts              # Frontend API client
 │   └── index.css               # Tailwind styles
-└── .env.example                # RESEND_API_KEY, TAVILY_API_KEY (optional)
+└── .env.example                # RESEND_API_KEY
 ```
 
 ## Implementation Details
@@ -256,10 +253,8 @@ Minimal:
 ### 5. Helpers
 
 - **[worker/lib/ai.ts](worker/lib/ai.ts)**:
-  - `discoverSources(ai, query, tavilyApiKey?)` -- If Tavily key set: search Tavily, validate URLs, return real sources. Else: LLM extracts query → Google News URL. No LLM URL hallucination.
+  - `discoverSources(ai, query)` -- LLM extracts search query → Google News search URL. One dynamic source per scout.
   - `analyzeChange(ai, query, oldText, newText)` -- "Did a meaningful event occur?" Uses `@cf/meta/llama-3.1-8b-instruct-fp8`
-- **[worker/lib/tavily.ts](worker/lib/tavily.ts)**: `searchTavily(apiKey, query)` -- Tavily Search API, returns real URLs from web search
-- **[worker/lib/source-validation.ts](worker/lib/source-validation.ts)**: `filterValidSources(sources)` -- HEAD/GET check, filters unreachable URLs
 - **[worker/lib/fetcher.ts](worker/lib/fetcher.ts)**: `fetchPageText(url)` -- fetches URL, strips HTML tags, returns clean text (simple regex/string approach, no heavy parsing lib)
 - **[worker/lib/email.ts](worker/lib/email.ts)**: `sendEventEmail(apiKey, to, scoutQuery, event)` -- uses Resend SDK. Clean subject line like "Terascout: RTX 5090 now in stock". Minimal HTML body with summary + source link
 

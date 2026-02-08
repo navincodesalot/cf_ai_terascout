@@ -31,6 +31,10 @@
     "binding": "AI",
   },
 
-  /** Optional: set via `wrangler secret put TAVILY_API_KEY` for real web search */
-  // "vars": { "TAVILY_API_KEY": "" } — use secret, not vars
+  "routes": [
+    {
+      "pattern": "terascout.vael.ai",
+      "custom_domain": true,
+    },
+  ],
 }

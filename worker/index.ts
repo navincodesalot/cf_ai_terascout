@@ -71,12 +71,8 @@ async function handleCreateScout(
 
   const scoutId = crypto.randomUUID();
 
-  // Source discovery: Tavily web search (real URLs) or fallback to Google News
-  const sources = await discoverSources(
-    env.AI,
-    body.query.trim(),
-    env.TAVILY_API_KEY,
-  );
+  // Source discovery: Google News search URL (dynamic—new articles appear when we poll)
+  const sources = await discoverSources(env.AI, body.query.trim());
 
   const config: ScoutConfig = {
     scoutId,
