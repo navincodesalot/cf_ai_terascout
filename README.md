@@ -19,7 +19,7 @@ AI-powered event intelligence on Cloudflare. Natural language in, structured ema
 ```bash
 git clone https://github.com/navincodesalot/cf_ai_terascout
 pnpm install
-cp .env.example .env   # add your RESEND_API_KEY
+cp .env.example .env   # add your RESEND_API_KEY and RESEND_FROM_EMAIL
 pnpm dev               # http://localhost:8787
 ```
 
@@ -27,6 +27,7 @@ For production:
 
 ```bash
 pnpx wrangler secret put RESEND_API_KEY
+pnpx wrangler secret put RESEND_FROM_EMAIL
 pnpm deploy
 ```
 

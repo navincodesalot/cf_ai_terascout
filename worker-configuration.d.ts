@@ -9,6 +9,7 @@ declare namespace Cloudflare {
   interface Env {
     AI: Ai;
     RESEND_API_KEY: string;
+    RESEND_FROM_EMAIL: string;
     SCOUT_DO: DurableObjectNamespace<import("./worker/index").ScoutDO>;
     SCOUT_WORKFLOW: Workflow<
       Parameters<import("./worker/index").ScoutWorkflow["run"]>[0]["payload"]

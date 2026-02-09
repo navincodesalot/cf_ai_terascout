@@ -7,6 +7,7 @@ import type { ScoutEvent, Article } from "../types";
  */
 export async function sendEventEmail(
   apiKey: string,
+  from: string,
   to: string,
   scoutQuery: string,
   event: ScoutEvent,
@@ -17,7 +18,7 @@ export async function sendEventEmail(
   const subjectText = event.tldr || event.summary.slice(0, 80);
 
   await resend.emails.send({
-    from: "Terascout <onboarding@resend.dev>",
+    from,
     to,
     subject: `Terascout ${subjectPrefix}: ${subjectText}`,
     html: buildEmailHtml(scoutQuery, event),

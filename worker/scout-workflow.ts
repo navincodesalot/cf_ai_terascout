@@ -2,6 +2,7 @@ import {
   WorkflowEntrypoint,
   type WorkflowEvent,
   type WorkflowStep,
+  env,
 } from "cloudflare:workers";
 import { fetchPageText, hashText } from "./lib/fetcher";
 import { analyzeChange, isDuplicateEvent } from "./lib/ai";
@@ -34,8 +35,8 @@ export class ScoutWorkflow extends WorkflowEntrypoint<Env, WorkflowParams> {
     for (let cycle = 0; cycle < SCOUT_CONFIG.maxCycles; cycle++) {
       // ── Step 1: Load config from DO ────────────────────────────
       const config = await step.do(`load-config-${cycle}`, async () => {
-        const doId = this.env.SCOUT_DO.idFromName(scoutId);
-        const stub = this.env.SCOUT_DO.get(doId);
+        const doId = env.SCOUT_DO.idFromName(scoutId);
+        const stub = env.SCOUT_DO.get(doId);
         const res = await stub.fetch(new Request("http://do/config"));
         if (!res.ok) throw new Error("Failed to load scout config");
         return (await res.json()) as ScoutConfig;
@@ -54,8 +55,8 @@ export class ScoutWorkflow extends WorkflowEntrypoint<Env, WorkflowParams> {
 
       // ── Step 3: Check email rate limit for today ───────────────
       const emailCount = await step.do(`email-count-${cycle}`, async () => {
-        const doId = this.env.SCOUT_DO.idFromName(scoutId);
-        const stub = this.env.SCOUT_DO.get(doId);
+        const doId = env.SCOUT_DO.idFromName(scoutId);
+        const stub = env.SCOUT_DO.get(doId);
         const res = await stub.fetch(new Request("http://do/email-count"));
         return (await res.json()) as { dateKey: string; count: number };
       });
@@ -94,8 +95,8 @@ export class ScoutWorkflow extends WorkflowEntrypoint<Env, WorkflowParams> {
         const lastSnapshot = await step.do(
           `snapshot-${cycle}-${source.label}`,
           async () => {
-            const doId = this.env.SCOUT_DO.idFromName(scoutId);
-            const stub = this.env.SCOUT_DO.get(doId);
+            const doId = env.SCOUT_DO.idFromName(scoutId);
+            const stub = env.SCOUT_DO.get(doId);
             const url = `http://do/snapshot?source=${encodeURIComponent(source.url)}`;
             const res = await stub.fetch(new Request(url));
             return (await res.json()) as SourceSnapshot | null;
@@ -107,8 +108,8 @@ export class ScoutWorkflow extends WorkflowEntrypoint<Env, WorkflowParams> {
 
         // Save updated snapshot regardless
         await step.do(`save-snapshot-${cycle}-${source.label}`, async () => {
-          const doId = this.env.SCOUT_DO.idFromName(scoutId);
-          const stub = this.env.SCOUT_DO.get(doId);
+          const doId = env.SCOUT_DO.idFromName(scoutId);
+          const stub = env.SCOUT_DO.get(doId);
           await stub.fetch(
             new Request("http://do/snapshot", {
               method: "POST",
@@ -128,7 +129,7 @@ export class ScoutWorkflow extends WorkflowEntrypoint<Env, WorkflowParams> {
             `analyze-${cycle}-${source.label}`,
             async () => {
               return analyzeChange(
-                this.env.AI,
+                env.AI,
                 config.query,
                 lastSnapshot?.text ?? "",
                 fetchResult.text,
@@ -141,8 +142,8 @@ export class ScoutWorkflow extends WorkflowEntrypoint<Env, WorkflowParams> {
             const isDuplicate = await step.do(
               `dedupe-${cycle}-${source.label}`,
               async () => {
-                const doId = this.env.SCOUT_DO.idFromName(scoutId);
-                const stub = this.env.SCOUT_DO.get(doId);
+                const doId = env.SCOUT_DO.idFromName(scoutId);
+                const stub = env.SCOUT_DO.get(doId);
                 const res = await stub.fetch(new Request("http://do/events"));
                 const events = (await res.json()) as ScoutEvent[];
                 const recentSummaries = events
@@ -150,7 +151,7 @@ export class ScoutWorkflow extends WorkflowEntrypoint<Env, WorkflowParams> {
                   .map((e) => e.summary)
                   .filter(Boolean);
                 return isDuplicateEvent(
-                  this.env.AI,
+                  env.AI,
                   analysis.summary,
                   recentSummaries,
                   config.query,
@@ -171,8 +172,8 @@ export class ScoutWorkflow extends WorkflowEntrypoint<Env, WorkflowParams> {
             const recorded = await step.do(
               `record-event-${cycle}-${source.label}`,
               async () => {
-                const doId = this.env.SCOUT_DO.idFromName(scoutId);
-                const stub = this.env.SCOUT_DO.get(doId);
+                const doId = env.SCOUT_DO.idFromName(scoutId);
+                const stub = env.SCOUT_DO.get(doId);
                 const res = await stub.fetch(
                   new Request("http://do/event", {
                     method: "POST",
@@ -210,7 +211,8 @@ export class ScoutWorkflow extends WorkflowEntrypoint<Env, WorkflowParams> {
                 },
                 async () => {
                   await sendEventEmail(
-                    this.env.RESEND_API_KEY,
+                    env.RESEND_API_KEY,
+                    env.RESEND_FROM_EMAIL,
                     config.email,
                     config.query,
                     {
@@ -228,8 +230,8 @@ export class ScoutWorkflow extends WorkflowEntrypoint<Env, WorkflowParams> {
                   );
 
                   // Increment email counter
-                  const doId = this.env.SCOUT_DO.idFromName(scoutId);
-                  const stub = this.env.SCOUT_DO.get(doId);
+                  const doId = env.SCOUT_DO.idFromName(scoutId);
+                  const stub = env.SCOUT_DO.get(doId);
                   await stub.fetch(
                     new Request("http://do/email-count", { method: "POST" }),
                   );

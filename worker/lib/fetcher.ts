@@ -45,7 +45,9 @@ export async function fetchPageText(url: string): Promise<string> {
     }
 
     if (!res.ok) {
-      throw new Error(`Fetch failed for ${url}: ${res.status} ${res.statusText}`);
+      throw new Error(
+        `Fetch failed for ${url}: ${res.status} ${res.statusText}`,
+      );
     }
 
     const html = await res.text();

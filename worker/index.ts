@@ -1,3 +1,4 @@
+import { env } from "cloudflare:workers";
 import { discoverSources } from "./lib/ai";
 import { SCOUT_CONFIG } from "./config";
 import type {
@@ -13,7 +14,7 @@ export { ScoutDO } from "./scout-do";
 export { ScoutWorkflow } from "./scout-workflow";
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
     const path = url.pathname;
 
@@ -25,19 +26,19 @@ export default {
     try {
       // ── POST /api/scouts — create a new scout ───────────────────
       if (path === "/api/scouts" && request.method === "POST") {
-        return withCors(await handleCreateScout(request, env));
+        return withCors(await handleCreateScout(request));
       }
 
       // ── GET /api/scouts/:id — get scout status + events ─────────
       const getMatch = path.match(/^\/api\/scouts\/([a-f0-9-]+)$/);
       if (getMatch && request.method === "GET") {
-        return withCors(await handleGetScout(getMatch[1], env));
+        return withCors(await handleGetScout(getMatch[1]));
       }
 
       // ── DELETE /api/scouts/:id — cancel a scout ─────────────────
       const deleteMatch = path.match(/^\/api\/scouts\/([a-f0-9-]+)$/);
       if (deleteMatch && request.method === "DELETE") {
-        return withCors(await handleDeleteScout(deleteMatch[1], env));
+        return withCors(await handleDeleteScout(deleteMatch[1]));
       }
 
       // ── Fallthrough: 404 for unmatched /api routes ──────────────
@@ -57,10 +58,7 @@ export default {
 
 // ── Route handlers ──────────────────────────────────────────────────
 
-async function handleCreateScout(
-  request: Request,
-  env: Env,
-): Promise<Response> {
+async function handleCreateScout(request: Request): Promise<Response> {
   const body = (await request.json()) as CreateScoutRequest;
 
   if (!body.query?.trim()) {
@@ -124,7 +122,7 @@ async function handleCreateScout(
   return Response.json(response, { status: 201 });
 }
 
-async function handleGetScout(scoutId: string, env: Env): Promise<Response> {
+async function handleGetScout(scoutId: string): Promise<Response> {
   const doId = env.SCOUT_DO.idFromName(scoutId);
   const stub = env.SCOUT_DO.get(doId);
 
@@ -143,7 +141,7 @@ async function handleGetScout(scoutId: string, env: Env): Promise<Response> {
   return Response.json(response);
 }
 
-async function handleDeleteScout(scoutId: string, env: Env): Promise<Response> {
+async function handleDeleteScout(scoutId: string): Promise<Response> {
   // Terminate the workflow
   try {
     const instance = await env.SCOUT_WORKFLOW.get(scoutId);
