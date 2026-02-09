@@ -42,7 +42,7 @@ Node 22+, pnpm 10+, Cloudflare account (free tier works), [Resend](https://resen
 
 1. **Query extraction** (`ai.ts → extractSearchQueryWithTime`) — _"keep me in the loop on today's Super Bowl pre-game events"_ → `{ query: "Super Bowl pre-game", time_range: "1d" }`. Strips filler, picks a Google News time filter.
 
-2. **Change analysis** (`ai.ts → analyzeChange`) — Fetches the Google News page, SHA-256 hashes it, compares to last snapshot. If changed, the LLM diffs old vs new text and extracts: TL;DR, summary, highlights, article titles/URLs, and a breaking news flag.
+2. **Change analysis** (`ai.ts → analyzeChange`) — Fetches the Google News page every poll. After the first baseline poll, the LLM compares old vs new content to detect new articles, headlines, or developments. Extracts: TL;DR, summary, highlights, article titles/URLs, and a breaking news flag.
 
 3. **Semantic dedup** (`ai.ts → isDuplicateEvent`) — Compares the new event summary against the last 5 events. Same story rephrased across polls gets silently dropped.
 
@@ -64,12 +64,12 @@ DOs instead of D1 because each scout is an independent actor with its own lifecy
 ```
 Load config → check expiration → check email rate limit
   → fetch source (retries: 2, timeout: 30s)
-  → hash diff → LLM analysis → LLM dedup
+  → save snapshot → if not first poll: LLM change detection → LLM dedup
   → record event (idempotent) → send email (retries: 3, exp backoff)
   → sleep 10 min → repeat
 ```
 
-Per-instance lifecycle (not a shared cron). Failed fetches skip that source, workflow continues. Hard stop: workflow checks `expiresAt` each cycle and terminates when expired.
+Per-instance lifecycle (not a shared cron). First poll establishes baseline (no email). Subsequent polls detect new content via LLM. Failed fetches skip that source, workflow continues. Hard stop: workflow checks `expiresAt` each cycle and terminates when expired.
 
 ### Smart expiration
 

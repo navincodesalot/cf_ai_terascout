@@ -16,15 +16,18 @@ export async function discoverSources(
 }
 
 /**
- * Event Analysis — richer version.
+ * Change Detection — detects new content in Google News.
  *
- * When a page diff is detected, the LLM decides whether it's a
- * meaningful event and extracts:
+ * Compares old vs new content and determines if there are new articles,
+ * headlines, or story developments. Extracts:
  *   - TLDR (one-liner)
  *   - Detailed summary
- *   - Key highlights / what changed
- *   - Article info (titles, URLs, images)
+ *   - Key highlights / what's new
+ *   - Article info (titles, URLs, snippets)
  *   - Whether it's breaking news
+ *
+ * Since content is from Google News, articles are assumed real.
+ * Focus is on detecting NEW content, not verifying authenticity.
  */
 export async function analyzeChange(
   ai: Ai,
@@ -36,43 +39,27 @@ export async function analyzeChange(
   const oldTrunc = oldText.slice(0, maxLen);
   const newTrunc = newText.slice(0, maxLen);
 
-  const prompt = `You are an event detection and news analysis system. A user is monitoring for:
+  const prompt = `You are part of a news monitoring system. A user set up a scout for "${query}" and we poll Google News every 10 minutes. Below are two snapshots from consecutive polls—your job is to decide whether anything meaningfully new appeared in the second one.
 
-"${query}"
+If the NEW snapshot has different articles, new headlines, or story developments compared to OLD, that's an event we should notify the user about. Skip trivial changes like timestamps updating ("2h ago" → "3h ago"), ad rotations, or layout shifts; we only care about substantive news changes.
 
-A web page (Google News search results) has changed. Here is the OLD content (excerpt):
+When you do find new content, extract a short tldr (max 15 words), a 2–4 sentence summary, 2–5 key highlights, and the articles from the NEW content (title, url, snippet for each). Mark is_breaking as true only if the news is urgent.
+
+Here is the OLD content (previous poll):
 ---
 ${oldTrunc}
 ---
 
-Here is the NEW content (excerpt):
+Here is the NEW content (current poll):
 ---
 ${newTrunc}
 ---
 
-Determine if this change represents a meaningful event related to the user's intent.
-Ignore minor changes like timestamps, ad rotations, session IDs, or layout tweaks.
-Focus on substantive changes: new articles, new headlines, price drops, announcements, etc.
+Return ONLY valid JSON. If there is new content worth notifying about:
+{"is_event": true, "tldr": "...", "summary": "...", "highlights": ["..."], "articles": [{"title": "...", "url": "...", "snippet": "..."}], "is_breaking": false}
 
-If it IS a meaningful event, extract the following. NEVER invent or infer details—only use what is explicitly stated in the OLD/NEW content above. When unsure, omit. Better to be accurate and show less than to fabricate.
-
-When the content DOES name people, places, or events: include those names. When it does NOT: stay general. Never guess or assume.
-
-1. "tldr": One sentence (max 15 words). Include specific names/places only if they appear in the content. If the content doesn't name anyone, a general summary is fine. Never invent names.
-
-2. "summary": 2-4 sentences. Extract only facts present in the content. If names are mentioned, include them. If not, describe what happened generally—do not guess who was involved.
-
-3. "highlights": 2-5 distinct facts from the content. Each must be directly supported by the text. Omit a highlight if you're not sure it's in the content.
-
-4. "articles": Array from the new content. Extract only articles you can clearly identify. For "snippet", use details from the article—never invent. If you can't extract an article reliably, omit it.
-
-5. "is_breaking": true if breaking/urgent, false otherwise.
-
-Return ONLY valid JSON:
-{"is_event": true, "tldr": "...", "summary": "...", "highlights": ["...", "..."], "articles": [{"title": "...", "url": "...", "snippet": "..."}], "is_breaking": true/false}
-
-If the change is NOT meaningful, return:
-{"is_event": false, "tldr": "", "summary": "no meaningful change detected", "highlights": [], "articles": [], "is_breaking": false}`;
+If there is no new content:
+{"is_event": false, "tldr": "", "summary": "no new content", "highlights": [], "articles": [], "is_breaking": false}`;
 
   const response = await ai.run(MODEL, {
     messages: [{ role: "user", content: prompt }],

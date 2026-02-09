@@ -1,23 +1,58 @@
+const MAX_RETRIES = 3;
+const BASE_DELAY_MS = 2000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 /**
  * Fetch a URL and extract visible text from the HTML.
- * No heavy parsing libraries — just regex-based tag stripping.
+ * Retries on 429 (Too Many Requests) with exponential backoff.
+ * Adds jitter before each attempt to spread concurrent requests.
  */
 export async function fetchPageText(url: string): Promise<string> {
-  const res = await fetch(url, {
-    headers: {
-      "User-Agent":
-        "Mozilla/5.0 (compatible; Terascout/1.0; +https://terascout.dev)",
-      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    },
-    redirect: "follow",
-  });
+  const isNewsGoogle = url.startsWith("https://news.google.com");
 
-  if (!res.ok) {
-    throw new Error(`Fetch failed for ${url}: ${res.status} ${res.statusText}`);
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    // Jitter: add 0–3s delay before fetch to spread concurrent requests
+    if (isNewsGoogle) {
+      const jitter = Math.floor(Math.random() * 3000);
+      await sleep(jitter);
+    }
+
+    const res = await fetch(url, {
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (compatible; Terascout/1.0; +https://terascout.dev)",
+        Accept:
+          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      },
+      redirect: "follow",
+    });
+
+    if (res.status === 429) {
+      if (attempt === MAX_RETRIES) {
+        throw new Error(
+          `Fetch failed for ${url}: 429 Too Many Requests (rate limited after ${MAX_RETRIES + 1} attempts)`,
+        );
+      }
+      const retryAfter = res.headers.get("Retry-After");
+      const delayMs = retryAfter
+        ? parseInt(retryAfter, 10) * 1000
+        : BASE_DELAY_MS * Math.pow(2, attempt);
+      await sleep(Math.min(delayMs, 60_000)); // cap at 60s
+      continue;
+    }
+
+    if (!res.ok) {
+      throw new Error(`Fetch failed for ${url}: ${res.status} ${res.statusText}`);
+    }
+
+    const html = await res.text();
+    return extractText(html);
   }
 
-  const html = await res.text();
-  return extractText(html);
+  throw new Error(`Fetch failed for ${url}: unexpected`);
 }
 
 /**

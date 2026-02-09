@@ -91,12 +91,11 @@ User submits `{ query, email }` to `POST /api/scouts`.
 
 1. **Load config** — Fetch config + sources from DO
 2. **For each source**:
-   - **Fetch** — GET the Google News URL, extract text, hash it
-   - **Diff** — Compare hash to last snapshot (from DO)
-   - **Save snapshot** — Update DO with new hash/text regardless
-   - **If content changed**:
-     - **LLM: event analysis** — "Is this change meaningful?" (new articles, headlines, etc.)
-     - **If meaningful**:
+   - **Fetch** — GET the Google News URL, extract text, save snapshot
+   - **First poll** — Establish baseline (no analysis, no email)
+   - **Subsequent polls** — LLM compares old vs new content:
+     - **LLM: change detection** — "Are there new articles, headlines, or developments?"
+     - **If new content detected**:
        - **LLM: deduplication** — Compare summary to last 5 events. Same news? Skip.
        - **If not duplicate**:
          - **Record event** — Store in DO (idempotent by eventId)
@@ -107,8 +106,8 @@ User submits `{ query, email }` to `POST /api/scouts`.
 
 An email is sent only when **all** of these are true:
 
-- Content hash changed (page is different from last poll)
-- LLM says it's a meaningful event (not ads, timestamps, layout noise)
+- Not the first poll (first poll establishes baseline)
+- LLM detects new content (new articles, headlines, or story developments)
 - LLM says it's not a duplicate of recent events (same story, different poll)
 - Event hasn't been recorded before (idempotency)
 

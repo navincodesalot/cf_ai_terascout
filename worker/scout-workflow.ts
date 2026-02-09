@@ -19,9 +19,9 @@ interface WorkflowParams {
  * Each scout gets one workflow instance that:
  *   1. Loads config from its Durable Object
  *   2. Checks if the scout has expired (hard stop)
- *   3. Fetches each source and diffs with last snapshot
- *   4. If diff detected, asks Workers AI if it's a real event
- *   5. If real event + under email limit, records it and sends email via Resend
+ *   3. Fetches each source and saves snapshot
+ *   4. After first poll (baseline), asks Workers AI to detect new content
+ *   5. If new content + not duplicate + under email limit, records event and sends email via Resend
  *   6. Sleeps, then loops
  */
 export class ScoutWorkflow extends WorkflowEntrypoint<Env, WorkflowParams> {
@@ -103,7 +103,7 @@ export class ScoutWorkflow extends WorkflowEntrypoint<Env, WorkflowParams> {
         );
 
         const oldHash = lastSnapshot?.contentHash ?? "";
-        const hasChanged = oldHash !== "" && oldHash !== fetchResult.hash;
+        const isFirstPoll = oldHash === "";
 
         // Save updated snapshot regardless
         await step.do(`save-snapshot-${cycle}-${source.label}`, async () => {
@@ -122,8 +122,8 @@ export class ScoutWorkflow extends WorkflowEntrypoint<Env, WorkflowParams> {
           );
         });
 
-        // If content changed, analyze with LLM
-        if (hasChanged) {
+        // Always analyze after first poll (let LLM decide if content is new/different)
+        if (!isFirstPoll) {
           const analysis = await step.do(
             `analyze-${cycle}-${source.label}`,
             async () => {
