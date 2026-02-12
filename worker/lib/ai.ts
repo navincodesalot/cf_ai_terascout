@@ -43,7 +43,12 @@ export async function analyzeChange(
 
 If the NEW snapshot has different articles, new headlines, or story developments compared to OLD, that's an event we should notify the user about. Skip trivial changes like timestamps updating ("2h ago" → "3h ago"), ad rotations, or layout shifts; we only care about substantive news changes.
 
-When you do find new content, extract a short tldr (max 15 words), a 2–4 sentence summary, 2–5 key highlights, and the articles from the NEW content (title, url, snippet for each). Mark is_breaking as true only if the news is urgent.
+When you do find new content:
+- Extract a short tldr (max 15 words) that goes beyond just rephrasing a headline.
+- Write a 2–4 sentence summary that synthesizes what actually happened: what changed, why it matters, who is impacted, and any concrete numbers/timelines you can see. Do NOT just restate an article title; add context and implications.
+- List 2–5 key highlights that capture the most important concrete facts or developments (not just headline variants).
+- Extract the articles from the NEW content (title, url, snippet for each). For each article, the url MUST be copied exactly from a URL string that appears in the NEW content (for example, a https://news.google.com/... link). Never invent, shorten, or edit URLs. If you truly cannot find a URL for an article, set its "url" to an empty string "".
+Mark is_breaking as true only if the news is urgent.
 
 Here is the OLD content (previous poll):
 ---

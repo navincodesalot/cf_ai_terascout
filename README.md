@@ -4,6 +4,14 @@ AI-powered event intelligence on Cloudflare. Natural language in, structured ema
 
 **Check it out at:** [terascout.vael.ai](https://terascout.vael.ai)
 
+## Demo
+
+<p align="center">
+  <video src="docs/Terascout_Demo.mp4" controls width="720">
+    Your browser does not support the video tag.
+  </video>
+</p>
+
 ## Cloudflare Technologies Used
 
 | Technology                                   | What it does here                                                                          |

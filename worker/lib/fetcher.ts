@@ -72,6 +72,16 @@ function extractText(html: string): string {
   // Remove HTML comments
   text = text.replace(/<!--[\s\S]*?-->/g, " ");
 
+  // Inline anchor hrefs so URLs are visible in the plain text.
+  // This lets downstream LLM prompts copy real article URLs from Google News
+  // instead of inventing them.
+  text = text.replace(
+    /<a\s+[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi,
+    (_match, href, inner) => {
+      return `${inner} ${href}`;
+    },
+  );
+
   // Remove all HTML tags
   text = text.replace(/<[^>]+>/g, " ");
 
