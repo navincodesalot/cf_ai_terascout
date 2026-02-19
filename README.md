@@ -7,7 +7,7 @@ AI-powered event intelligence on Cloudflare. Natural language in, structured ema
 ## Demo
 
 <p align="center">
-  <video src="docs/Terascout_Demo.mp4" controls width="720">
+  <video src="https://github.com/user-attachments/assets/4ab4ab00-ffa8-443c-bb2b-cf8cbd9f9b24" controls width="720">
     Your browser does not support the video tag.
   </video>
 </p>
